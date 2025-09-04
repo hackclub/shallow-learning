@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 class GAConfig:
     population_size: int = 64
     elite_fraction: float = 0.1
-    mutation_std: float = 0.05
+    # Linear annealing of mutation std from start -> end over generations
+    mutation_std_start: float = 0.08
+    mutation_std_end: float = 0.01
     crossover_fraction: float = 0.5
     generations: int = 50
     episodes_per_eval: int = 1
@@ -68,6 +70,14 @@ def train_ga(env: PlatformerEnv, policy_cfg: MLPPolicyConfig, ga_cfg: GAConfig) 
     best_fitness = -np.inf
 
     for gen in range(ga_cfg.generations):
+        # Compute linearly annealed mutation std for this generation
+        if ga_cfg.generations > 1:
+            alpha = gen / float(ga_cfg.generations - 1)
+        else:
+            alpha = 1.0
+        current_mutation_std = (
+            (1.0 - alpha) * ga_cfg.mutation_std_start + alpha * ga_cfg.mutation_std_end
+        )
         # Evaluate
         fitness = np.zeros(ga_cfg.population_size, dtype=np.float32)
         for i in range(ga_cfg.population_size):
@@ -83,7 +93,14 @@ def train_ga(env: PlatformerEnv, policy_cfg: MLPPolicyConfig, ga_cfg: GAConfig) 
         # Progress logging
         mean_f = float(np.mean(fitness))
         max_f = float(np.max(fitness))
-        logger.info("gen %d/%d - max=%.3f mean=%.3f", gen + 1, ga_cfg.generations, max_f, mean_f)
+        logger.info(
+            "gen %d/%d - max=%.3f mean=%.3f sigma=%.4f",
+            gen + 1,
+            ga_cfg.generations,
+            max_f,
+            mean_f,
+            current_mutation_std,
+        )
 
         # Save checkpoint on any improvement
         if improved and ga_cfg.checkpoint_dir is not None:
@@ -107,7 +124,7 @@ def train_ga(env: PlatformerEnv, policy_cfg: MLPPolicyConfig, ga_cfg: GAConfig) 
         for i in range(elite_count, ga_cfg.population_size):
             pa, pb = rng.choice(elite_count, size=2, replace=True)
             child = crossover(elites[pa], elites[pb], rng)
-            child = mutate(child, ga_cfg.mutation_std, rng)
+            child = mutate(child, current_mutation_std, rng)
             new_population[i] = child
         population = new_population
 

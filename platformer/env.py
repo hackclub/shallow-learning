@@ -12,14 +12,14 @@ Platform = Tuple[float, float, float, float]  # (x, y, w, h) in world units, y u
 class GameConfig:
     width: float = 50.0
     height: float = 10.0
-    x_goal: float = 40.0
+    x_goal: float = 50.0
 
     dt: float = 0.02
     gravity: float = -25.0  # y-axis points upward
     move_accel: float = 120.0
     max_speed: float = 8.0
     jump_velocity: float = 10.0
-    friction: float = 4.0
+    friction: float = 2.0
 
     episode_length: int = 1000  # also acts as max timer steps
 
@@ -32,6 +32,10 @@ class GameConfig:
     finish_speed_bonus: float = 50.0  # bonus scaled by remaining time ratio
     finish_base_bonus: float = 5.0  # flat bonus on finish
     failure_penalty: float = 200.0  # applied on any non-successful termination
+    jump_penalty: float = 0.2  # small penalty when a jump is initiated
+
+    # Movement control
+    air_control_scale: float = 0.5  # fraction of horizontal accel allowed while airborne
 
     # Powerup: jump multiplier near goal
     powerup_radius: float = 0.3
@@ -52,7 +56,7 @@ class GameConfig:
                 (5.0, 1.0, 3.0, 0.5),
                 (10.0, 2.0, 3.0, 0.5),
                 (16.0, 3.5, 3.0, 0.5),
-                (23.0, 2.5, 3.0, 0.5),
+                # (23.0, 2.5, 3.0, 0.5),
                 (30.0, 1.5, 3.5, 0.5),
             ]
 
@@ -132,10 +136,11 @@ class PlatformerEnv:
         ax = 0.0
         wants_left = action in (1, 4)
         wants_right = action in (2, 5)
+        input_accel = cfg.move_accel * (1.0 if self.on_ground else cfg.air_control_scale)
         if wants_left and not wants_right:
-            ax -= cfg.move_accel
+            ax -= input_accel
         elif wants_right and not wants_left:
-            ax += cfg.move_accel
+            ax += input_accel
 
         # Friction/damping: apply strong damping when no input; light damping when steering
         if (wants_left and wants_right) or (not wants_left and not wants_right):
@@ -145,6 +150,7 @@ class PlatformerEnv:
 
         # Jump (pressure-sensitive)
         wants_jump = action in (3, 4, 5)
+        jump_initiated = False
         if wants_jump and self.on_ground and not self.is_in_jump:
             mult = cfg.powerup_jump_multiplier if self.has_jump_powerup else 1.0
             self.vy = cfg.jump_velocity * mult
@@ -152,6 +158,7 @@ class PlatformerEnv:
             self.is_in_jump = True
             self.jump_hold_time_s = 0.0
             self.jump_cut_applied = False
+            jump_initiated = True
         # Track hold time while in jump
         if self.is_in_jump and wants_jump and self.jump_hold_time_s < cfg.variable_jump_max_hold_s:
             self.jump_hold_time_s += dt
@@ -243,6 +250,8 @@ class PlatformerEnv:
         progress = max(0.0, self.x - self.prev_x)
         reward = progress
         reward += coin_reward_total
+        if jump_initiated:
+            reward -= cfg.jump_penalty
         if succeed:
             time_ratio = max(0.0, 1.0 - (self.timestep / float(max(1, cfg.episode_length))))
             reward += cfg.finish_base_bonus + cfg.finish_speed_bonus * time_ratio

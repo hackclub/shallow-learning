@@ -74,7 +74,7 @@ class Renderer:
                 fit = None
         return gen, fit
 
-    def render_episode(self, env: PlatformerEnv, policy: Optional[MLPPolicy] = None, fps: int = 30, speed: float = 1.0, label: Optional[str] = None) -> None:
+    def render_episode(self, env: PlatformerEnv, policy: Optional[MLPPolicy] = None, fps: int = 30, speed: float = 1.0, label: Optional[str] = None, progress: Optional[tuple[int, int]] = None) -> None:
         cfg = env.config
         self._ensure_window(cfg)
         screen = self.screen
@@ -88,6 +88,10 @@ class Renderer:
         while not done:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    done = True
+                    break
+                # allow skipping to next generation with space when rendering a policy
+                if policy is not None and event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                     done = True
                     break
 
@@ -149,6 +153,15 @@ class Renderer:
             text_surface = self.font.render(hud_text, True, (230, 230, 230))
             screen.blit(text_surface, (10, 10))
 
+            # Progress top-right (index/total) during playback
+            if progress is not None:
+                i, n = progress
+                prog_surface = self.font_big.render(f"{i}/{n}", True, (255, 255, 255))
+                pr = prog_surface.get_rect()
+                pr.top = 6
+                pr.right = width_px - 10
+                screen.blit(prog_surface, pr)
+
             # Label + parsed meta
             if label:
                 base = os.path.basename(label)
@@ -191,10 +204,11 @@ def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0) -> Non
     weights_paths = sorted(weights_paths, key=sort_key)
 
     cfg = MLPPolicyConfig(input_size=env.observation_size, output_size=env.action_size)
-    for path in weights_paths:
+    total = len(weights_paths)
+    for idx, path in enumerate(weights_paths, start=1):
         policy = MLPPolicy(cfg)
         flat = np.load(path)
         policy.set_flat(flat)
-        renderer.render_episode(env, policy, speed=speed, label=path)
+        renderer.render_episode(env, policy, speed=speed, label=path, progress=(idx, total))
 
     renderer.close()

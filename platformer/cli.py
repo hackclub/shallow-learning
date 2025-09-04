@@ -56,7 +56,8 @@ def cmd_train(args: argparse.Namespace) -> int:
         population_size=int(args.pop_size),
         generations=int(args.generations),
         elite_fraction=float(args.elite_frac),
-        mutation_std=float(args.mutation_std),
+        mutation_std_start=float(args.mutation_std_start),
+        mutation_std_end=float(args.mutation_std_end),
         episodes_per_eval=int(args.eval_episodes),
         seed=int(args.seed) if args.seed is not None else None,
         checkpoint_dir=args.ckpt_dir,
@@ -119,7 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--generations", type=int, default=20)
     pt.add_argument("--pop-size", type=int, default=64)
     pt.add_argument("--elite-frac", type=float, default=0.1)
-    pt.add_argument("--mutation-std", type=float, default=0.05)
+    pt.add_argument("--mutation-std-start", type=float, default=0.08, help="Initial mutation sigma")
+    pt.add_argument("--mutation-std-end", type=float, default=0.01, help="Final mutation sigma")
     pt.add_argument("--eval-episodes", type=int, default=1)
     pt.add_argument("--seed", type=int, default=None)
     pt.add_argument("--save", type=str, default=None)
