@@ -106,7 +106,7 @@ def cmd_render(args: argparse.Namespace) -> int:
 def cmd_play(args: argparse.Namespace) -> int:
     # play is just renderer without policy
     from .renderer import render as do_render
-    do_render([], speed=float(args.speed), show_hitboxes=bool(args.hitboxes))
+    do_render([], speed=float(args.speed), show_hitboxes=bool(args.hitboxes), show_intro=True)
     return 0
 
 

@@ -10,9 +10,10 @@ Platform = Tuple[float, float, float, float]  # (x, y, w, h) in world units, y u
 
 @dataclass
 class GameConfig:
-    width: float = 50.0
+    width: float = 50.0  # viewport width in world units (one screen)
     height: float = 10.0
-    x_goal: float = 40.0
+    x_goal: float = 40.0  # will be overridden based on level_screens
+    level_screens: int = 2  # number of screens the level spans horizontally
 
     # Simulation timing
     tickrate_hz: float = 30.0  # simulation updates per second
@@ -30,7 +31,7 @@ class GameConfig:
     platforms: List[Platform] = field(default_factory=list)
 
     # Coins and rewards
-    coin_radius: float = 0.25
+    coin_radius: float = 0.5
     coin_reward: float = 1000.0
     finish_speed_bonus: float = 50.0  # bonus scaled by remaining time ratio
     finish_base_bonus: float = 5.0  # flat bonus on finish
@@ -39,14 +40,16 @@ class GameConfig:
 
     # Movement control
     air_control_scale: float = 0.333  # fraction of horizontal accel allowed while airborne
+    # Running (Mario-style): increases max speed while on ground
+    run_speed_multiplier: float = 1.7
 
     # Powerup: jump multiplier near goal
-    powerup_radius: float = 0.3
+    powerup_radius: float = 0.1
     powerup_jump_multiplier: float = 2.0
     powerup_offset_x: float = 1.5  # place this far before goal line
     powerup_height: float = 1.2     # y above ground
     # Raccoon goal entity
-    raccoon_radius: float = 0.45
+    raccoon_radius: float = 0.5
 
     # Variable jump (pressure-sensitive): max time the jump can be held
     variable_jump_max_hold_s: float = 0.333
@@ -59,17 +62,13 @@ class GameConfig:
             self.tickrate_hz = 50.0
         self.dt = 1.0 / float(self.tickrate_hz)
         self.episode_length = int(max(1, round(self.episode_time_s * self.tickrate_hz)))
+        # Compute level length and end goal position
+        level_length = max(self.width * max(1, int(self.level_screens)), self.width)
+        self.x_goal = level_length - 2.0
         if not self.platforms:
-            # Ground and a few steps
+            # Start with ground only; rest will be procedurally generated in env.reset
             self.platforms = [
                 (-1e6, -0.5, 2e6, 0.5),  # infinite ground strip at y=0 top
-                # Top-left detour platform (with coin)
-                (1.0, 7.5, 2.5, 0.4),
-                (5.0, 1.0, 3.0, 0.5),
-                (10.0, 2.0, 3.0, 0.5),
-                (16.0, 3.5, 3.0, 0.5),
-                # (23.0, 2.5, 3.0, 0.5),
-                (30.0, 1.5, 3.5, 0.5),
             ]
 
 
@@ -97,7 +96,7 @@ class PlatformerEnv:
 
     @property
     def action_size(self) -> int:
-        return 6
+        return 12
 
     @property
     def observation_size(self) -> int:
@@ -113,6 +112,26 @@ class PlatformerEnv:
         self.prev_x = self.x
         self.done = False
 
+        # Deterministically (re)generate platforms across the full level
+        level_length = self.config.width * max(1, int(self.config.level_screens))
+        plats: List[Platform] = [(-1e6, -0.5, 2e6, 0.5)]
+        widths = [2.0, 4.0, 8.0]  # 1x2, 1x4, 1x8 (height fixed at 1)
+        ph = 1.0
+        top_levels = [1.0, 3.0, 5.0, 7.0]  # preset platform top heights (top edges)
+        # Place platforms at regular intervals for full determinism
+        spacing = 10.0
+        i = 0
+        x = 2.0
+        while x < (level_length - 2.0):
+            pw = widths[i % len(widths)]
+            top_y = top_levels[i % len(top_levels)]
+            px = min(max(2.0, x), level_length - pw - 2.0)
+            py = top_y - ph
+            plats.append((px, py, pw, ph))
+            i += 1
+            x += spacing
+        self.config.platforms = plats
+
         # Coins: one centered on top of each non-ground platform
         self.coins: List[Dict[str, Any]] = []
         for (px, py, pw, ph) in self.config.platforms[1:]:  # skip ground
@@ -122,7 +141,7 @@ class PlatformerEnv:
 
         # Jump powerup near goal
         self.has_jump_powerup: bool = False
-        # Place at middle-bottom of screen
+        # Place in the first screen near the ground
         mid_x = self.config.width * 0.5
         self.powerup = {
             "x": mid_x,
@@ -130,9 +149,9 @@ class PlatformerEnv:
             "collected": False,
         }
 
-        # Raccoon goal placed near previous goal line (collision center at (x,y))
+        # Raccoon goal placed at far right (collision center at (x,y))
         self.raccoon = {
-            "x": self.config.x_goal,
+            "x": level_length - 2.0,
             "y": 0.6,
         }
 
@@ -157,8 +176,8 @@ class PlatformerEnv:
 
         # Horizontal control
         ax = 0.0
-        wants_left = action in (1, 4)
-        wants_right = action in (2, 5)
+        wants_left = action in (1, 4, 7, 10)
+        wants_right = action in (2, 5, 8, 11)
         input_accel = cfg.move_accel * (1.0 if self.on_ground else cfg.air_control_scale)
         if wants_left and not wants_right:
             ax -= input_accel
@@ -172,7 +191,9 @@ class PlatformerEnv:
             ax -= 0.2 * cfg.friction * self.vx
 
         # Jump (pressure-sensitive)
-        wants_jump = action in (3, 4, 5)
+        wants_jump = action in (3, 4, 5, 9, 10, 11)
+        # Run modifier (only affects max speed while on ground)
+        wants_run = action in (6, 7, 8, 9, 10, 11)
         jump_initiated = False
         if wants_jump and self.on_ground and not self.is_in_jump and self.jump_cooldown_left_s <= 0.0:
             mult = cfg.powerup_jump_multiplier if self.has_jump_powerup else 1.0
@@ -199,7 +220,8 @@ class PlatformerEnv:
 
         # Integrate velocity
         self.vx += ax * dt
-        self.vx = float(np.clip(self.vx, -cfg.max_speed, cfg.max_speed))
+        max_speed_now = cfg.max_speed * (cfg.run_speed_multiplier if (self.on_ground and wants_run) else 1.0)
+        self.vx = float(np.clip(self.vx, -max_speed_now, max_speed_now))
         self.vy += cfg.gravity * dt
 
         # Axis-separated integration with full-rect collisions (AABB approx of player circle)
@@ -281,6 +303,7 @@ class PlatformerEnv:
             dx = self.x - coin["x"]
             dy = (self.y + pradius) - coin["y"]
             dist2 = dx * dx + dy * dy
+            # Respect both colliders' radii
             if dist2 <= (pradius + cfg.coin_radius) ** 2:
                 coin["collected"] = True
                 coin_reward_total += cfg.coin_reward

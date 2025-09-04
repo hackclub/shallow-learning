@@ -32,9 +32,37 @@ class Renderer:
         self._sprite_scaled: Dict[Tuple[str, int, int], Any] = {}
         # character facing state
         self._face_left = False
+        # camera state (world x of left edge)
+        self._camera_x = 0.0
+
+    def show_intro(self, env: PlatformerEnv, message: str = "COLLECT COINS FOR HEIDI", flashes: int = 4, on_ms: int = 450, off_ms: int = 250) -> None:
+        cfg = env.config
+        self._ensure_window(cfg)
+        screen = self.screen
+        font_big = self.font_big
+        assert screen is not None and font_big is not None
+        width_px, height_px = self._size
+        text_surface = font_big.render(message, True, (255, 255, 255))
+        rect = text_surface.get_rect()
+        rect.center = (width_px // 2, height_px // 2)
+
+        for i in range(max(1, flashes * 2)):
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
+                if event.type == pygame.KEYDOWN and event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                    return
+            screen.fill((0, 0, 0))
+            if i % 2 == 0:
+                screen.blit(text_surface, rect)
+                pygame.display.flip()
+                pygame.time.delay(on_ms)
+            else:
+                pygame.display.flip()
+                pygame.time.delay(off_ms)
 
     def _world_to_screen(self, x: float, y: float, height: float) -> Tuple[int, int]:
-        sx = int(x * self.scale_x)
+        sx = int((x - self._camera_x) * self.scale_x)
         sy = int((height - y) * self.scale_y)
         return sx, sy
 
@@ -157,13 +185,21 @@ class Renderer:
                     break
                 if policy is None:
                     keys = pygame.key.get_pressed()
-                    action = 0
-                    if keys[pygame.K_LEFT]:
-                        action = 1
-                    if keys[pygame.K_RIGHT]:
-                        action = 2
-                    if keys[pygame.K_SPACE]:
-                        action = 5 if action == 2 else (4 if action == 1 else 3)
+                    left = keys[pygame.K_LEFT]
+                    right = keys[pygame.K_RIGHT]
+                    jump = keys[pygame.K_SPACE]
+                    run = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+
+                    base = 0
+                    if left and not right:
+                        base = 1
+                    elif right and not left:
+                        base = 2
+                    if jump:
+                        base = 5 if base == 2 else (4 if base == 1 else 3)
+                    if run:
+                        base += 6
+                    action = base
                 else:
                     action = policy.act(obs)
                 obs, reward, done, info = env.step(action)
@@ -173,6 +209,20 @@ class Renderer:
                 self._face_left = False
             elif env.vx > 0.05:
                 self._face_left = True
+
+            # Camera follow with 20% margins
+            level_length = float(cfg.width * max(1, int(getattr(cfg, 'level_screens', 1))))
+            viewport_w = float(cfg.width)
+            left_margin = self._camera_x + 0.2 * viewport_w
+            right_margin = self._camera_x + 0.8 * viewport_w
+            # Adjust camera to keep player within margins
+            if env.x < left_margin:
+                self._camera_x = env.x - 0.2 * viewport_w
+            elif env.x > right_margin:
+                self._camera_x = env.x - 0.8 * viewport_w
+            # Clamp camera within level bounds
+            max_cam = max(0.0, level_length - viewport_w)
+            self._camera_x = float(max(0.0, min(self._camera_x, max_cam)))
 
             # Draw
             screen.fill((30, 30, 40))
@@ -201,7 +251,7 @@ class Renderer:
                     rect.center = (cx, cy)
                     screen.blit(spr, rect)
                     if show_hitboxes:
-                        pygame.draw.circle(screen, (255, 255, 0), (cx, cy), int(4 * cfg.coin_radius * self._px_scale()), 1)
+                        pygame.draw.circle(screen, (255, 255, 0), (cx, cy), int(cfg.coin_radius * self._px_scale()), 1)
 
             # boots powerup sprite
             if hasattr(env, "powerup") and env.powerup and not env.powerup.get("collected"):
@@ -212,7 +262,7 @@ class Renderer:
                 rect.center = (cx, cy)
                 screen.blit(spr, rect)
                 if show_hitboxes:
-                    pygame.draw.circle(screen, (0, 200, 255), (cx, cy), int(4 * cfg.powerup_radius * self._px_scale()), 1)
+                    pygame.draw.circle(screen, (0, 200, 255), (cx, cy), int(cfg.powerup_radius * self._px_scale()), 1)
 
             # player as 8-bit dinosaur sprite (approx 0.8 world units tall)
             world_h = 1.0
@@ -236,7 +286,7 @@ class Renderer:
             if show_hitboxes:
                 pradius = 0.4
                 pcx, pcy = self._world_to_screen(env.x, env.y + pradius, cfg.height)
-                pygame.draw.circle(screen, (255, 60, 60), (pcx, pcy), int(4 * pradius * self._px_scale()), 1)
+                pygame.draw.circle(screen, (255, 60, 60), (pcx, pcy), int(pradius * self._px_scale()), 1)
 
             # raccoon goal
             rx, ry = getattr(env, 'raccoon', {"x": cfg.x_goal, "y": 0.6}).values()
@@ -248,7 +298,7 @@ class Renderer:
             rrect.center = (rcx, rcy)
             screen.blit(rac, rrect)
             if show_hitboxes:
-                pygame.draw.circle(screen, (255, 255, 255), (rcx, rcy), int(4 * cfg.raccoon_radius * self._px_scale()), 1)
+                pygame.draw.circle(screen, (255, 255, 255), (rcx, rcy), int(cfg.raccoon_radius * self._px_scale()), 1)
 
             # HUD: coins, time (seconds), powerup
             coins_text = f"Coins: {info.get('coins_collected', 0)}/{info.get('coins_total', 0)}"
@@ -291,11 +341,13 @@ class Renderer:
             self.clock.tick(fps)
 
 
-def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False) -> None:
+def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False, show_intro: bool = False) -> None:
     env = PlatformerEnv(GameConfig())
     renderer = Renderer()
 
     if not weights_paths:
+        if show_intro:
+            renderer.show_intro(env)
         renderer.render_episode(env, None, speed=speed, show_hitboxes=show_hitboxes)
         renderer.close()
         return
