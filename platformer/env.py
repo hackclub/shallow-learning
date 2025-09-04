@@ -12,26 +12,29 @@ Platform = Tuple[float, float, float, float]  # (x, y, w, h) in world units, y u
 class GameConfig:
     width: float = 50.0
     height: float = 10.0
-    x_goal: float = 50.0
+    x_goal: float = 40.0
 
-    dt: float = 0.02
+    # Simulation timing
+    tickrate_hz: float = 15.0  # simulation updates per second
+    episode_time_s: float = 20.0  # episode duration in seconds
+    dt: float = 0.1
     gravity: float = -25.0  # y-axis points upward
     move_accel: float = 120.0
     max_speed: float = 8.0
     jump_velocity: float = 10.0
-    friction: float = 2.0
+    friction: float = 8.0
 
-    episode_length: int = 1000  # also acts as max timer steps
+    episode_length: int = 250  # derived from episode_time_s * tickrate_hz
 
     # Platforms: specify as list of (x, y, w, h), y upwards
     platforms: List[Platform] = field(default_factory=list)
 
     # Coins and rewards
     coin_radius: float = 0.25
-    coin_reward: float = 10.0
+    coin_reward: float = 1000.0
     finish_speed_bonus: float = 50.0  # bonus scaled by remaining time ratio
     finish_base_bonus: float = 5.0  # flat bonus on finish
-    failure_penalty: float = 200.0  # applied on any non-successful termination
+    failure_penalty: float = 5000.0  # applied on any non-successful termination
     jump_penalty: float = 0.2  # small penalty when a jump is initiated
 
     # Movement control
@@ -47,6 +50,11 @@ class GameConfig:
     variable_jump_max_hold_s: float = 0.15
 
     def __post_init__(self) -> None:
+        # Derive dt and episode_length from tickrate and episode time
+        if self.tickrate_hz <= 0.0:
+            self.tickrate_hz = 50.0
+        self.dt = 1.0 / float(self.tickrate_hz)
+        self.episode_length = int(max(1, round(self.episode_time_s * self.tickrate_hz)))
         if not self.platforms:
             # Ground and a few steps
             self.platforms = [

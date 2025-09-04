@@ -145,9 +145,10 @@ class Renderer:
             gx1 = self._world_to_screen(cfg.x_goal, 0.0, cfg.height)[0]
             pygame.draw.line(screen, (200, 80, 80), (gx1, 0), (gx1, height_px), 2)
 
-            # HUD: coins, time, powerup
+            # HUD: coins, time (seconds), powerup
             coins_text = f"Coins: {info.get('coins_collected', 0)}/{info.get('coins_total', 0)}"
-            time_text = f"Time: {info.get('time_remaining', 0)}"
+            time_left_s = max(0.0, float(info.get('time_remaining', 0)) * float(cfg.dt))
+            time_text = f"Time: {time_left_s:.1f}s"
             pwr_text = "Power: x2 jump" if info.get('has_jump_powerup') else "Power: none"
             hud_text = f"{coins_text}  {time_text}  {pwr_text}"
             text_surface = self.font.render(hud_text, True, (230, 230, 230))

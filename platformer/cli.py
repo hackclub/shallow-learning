@@ -61,6 +61,8 @@ def cmd_train(args: argparse.Namespace) -> int:
         episodes_per_eval=int(args.eval_episodes),
         seed=int(args.seed) if args.seed is not None else None,
         checkpoint_dir=args.ckpt_dir,
+        eval_batch_size=int(args.eval_batch_size) if args.eval_batch_size is not None else None,
+        num_workers=int(args.num_workers) if args.num_workers is not None else None,
     )
     weights, fitness = train_ga(env, policy_cfg, ga_cfg)
     print(f"best_fitness={fitness:.3f}")
@@ -123,6 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--mutation-std-start", type=float, default=0.08, help="Initial mutation sigma")
     pt.add_argument("--mutation-std-end", type=float, default=0.01, help="Final mutation sigma")
     pt.add_argument("--eval-episodes", type=int, default=1)
+    pt.add_argument("--eval-batch-size", type=int, default=None, help="Batch size for vectorized evaluation (None = full pop)")
+    pt.add_argument("--num-workers", type=int, default=None, help="Number of processes for parallel evaluation")
     pt.add_argument("--seed", type=int, default=None)
     pt.add_argument("--save", type=str, default=None)
     # checkpoint and render flags
