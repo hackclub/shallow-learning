@@ -15,7 +15,7 @@ class GameConfig:
     x_goal: float = 40.0
 
     # Simulation timing
-    tickrate_hz: float = 15.0  # simulation updates per second
+    tickrate_hz: float = 30.0  # simulation updates per second
     episode_time_s: float = 20.0  # episode duration in seconds
     dt: float = 0.1
     gravity: float = -25.0  # y-axis points upward
@@ -38,16 +38,20 @@ class GameConfig:
     jump_penalty: float = 0.2  # small penalty when a jump is initiated
 
     # Movement control
-    air_control_scale: float = 0.5  # fraction of horizontal accel allowed while airborne
+    air_control_scale: float = 0.333  # fraction of horizontal accel allowed while airborne
 
     # Powerup: jump multiplier near goal
     powerup_radius: float = 0.3
     powerup_jump_multiplier: float = 2.0
     powerup_offset_x: float = 1.5  # place this far before goal line
     powerup_height: float = 1.2     # y above ground
+    # Raccoon goal entity
+    raccoon_radius: float = 0.45
 
     # Variable jump (pressure-sensitive): max time the jump can be held
-    variable_jump_max_hold_s: float = 0.15
+    variable_jump_max_hold_s: float = 0.333
+    # Cooldown after landing before another jump is allowed
+    jump_cooldown_s: float = 0.10
 
     def __post_init__(self) -> None:
         # Derive dt and episode_length from tickrate and episode time
@@ -113,7 +117,7 @@ class PlatformerEnv:
         self.coins: List[Dict[str, Any]] = []
         for (px, py, pw, ph) in self.config.platforms[1:]:  # skip ground
             cx = px + pw * 0.5
-            cy = py + ph + self.config.coin_radius + 0.05
+            cy = py + ph + self.config.coin_radius + 0.12
             self.coins.append({"x": cx, "y": cy, "collected": False})
 
         # Jump powerup near goal
@@ -126,10 +130,17 @@ class PlatformerEnv:
             "collected": False,
         }
 
+        # Raccoon goal placed near previous goal line (collision center at (x,y))
+        self.raccoon = {
+            "x": self.config.x_goal,
+            "y": 0.6,
+        }
+
         # Variable jump state
         self.is_in_jump = False
         self.jump_hold_time_s = 0.0
         self.jump_cut_applied = False
+        self.jump_cooldown_left_s = 0.0
 
         return self._get_observation()
 
@@ -139,6 +150,10 @@ class PlatformerEnv:
 
         cfg = self.config
         dt = cfg.dt
+
+        # Decrement jump cooldown timer
+        if self.jump_cooldown_left_s > 0.0:
+            self.jump_cooldown_left_s = max(0.0, self.jump_cooldown_left_s - dt)
 
         # Horizontal control
         ax = 0.0
@@ -159,7 +174,7 @@ class PlatformerEnv:
         # Jump (pressure-sensitive)
         wants_jump = action in (3, 4, 5)
         jump_initiated = False
-        if wants_jump and self.on_ground and not self.is_in_jump:
+        if wants_jump and self.on_ground and not self.is_in_jump and self.jump_cooldown_left_s <= 0.0:
             mult = cfg.powerup_jump_multiplier if self.has_jump_powerup else 1.0
             self.vy = cfg.jump_velocity * mult
             self.on_ground = False
@@ -187,35 +202,70 @@ class PlatformerEnv:
         self.vx = float(np.clip(self.vx, -cfg.max_speed, cfg.max_speed))
         self.vy += cfg.gravity * dt
 
-        # Integrate position
+        # Axis-separated integration with full-rect collisions (AABB approx of player circle)
+        pradius = 0.4
+        was_on_ground = self.on_ground
+
+        # Horizontal move and resolve against platform sides
         new_x = self.x + self.vx * dt
+        for (px, py, pw, ph) in self.config.platforms:
+            left = px
+            right = px + pw
+            bottom = py
+            top = py + ph
+            # check vertical overlap of player's AABB with platform
+            player_bottom = self.y
+            player_top = self.y + 2.0 * pradius
+            vertical_overlap = (player_top > bottom) and (player_bottom < top)
+            if not vertical_overlap:
+                continue
+            # moving right into left side
+            if (self.x + pradius) <= left and (new_x + pradius) > left:
+                new_x = left - pradius
+                self.vx = 0.0
+            # moving left into right side
+            if (self.x - pradius) >= right and (new_x - pradius) < right:
+                new_x = right + pradius
+                self.vx = 0.0
+
+        # Vertical move and resolve against platform tops/bottoms
         new_y = self.y + self.vy * dt
+        landed = False
+        for (px, py, pw, ph) in self.config.platforms:
+            left = px
+            right = px + pw
+            bottom = py
+            top = py + ph
+            # check horizontal overlap of player's AABB with platform
+            player_left = new_x - pradius
+            player_right = new_x + pradius
+            horizontal_overlap = (player_right > left) and (player_left < right)
+            if not horizontal_overlap:
+                continue
+            # moving up into platform bottom (head hit)
+            if (self.y + 2.0 * pradius) <= bottom and (new_y + 2.0 * pradius) > bottom:
+                new_y = bottom - 2.0 * pradius
+                self.vy = 0.0
+                self.is_in_jump = False
+            # moving down onto platform top (landing)
+            if self.y >= top and new_y < top:
+                new_y = top
+                self.vy = 0.0
+                self.on_ground = True
+                landed = True
 
-        collided = False
-        collided_top_y = None
-
-        # Ground/platform top collisions when moving downward
-        if new_y <= self.y:  # only check when descending
-            for (px, py, pw, ph) in self.config.platforms:
-                top_y = py + ph
-                within_x = (new_x >= px) and (new_x <= px + pw)
-                crosses_top = (self.y >= top_y) and (new_y <= top_y)
-                if within_x and crosses_top:
-                    new_y = top_y
-                    self.vy = 0.0
-                    self.on_ground = True
-                    collided = True
-                    collided_top_y = top_y
-                    break
-
-        if not collided:
-            # No collision resolved
+        if not landed:
+            # Not on ground if we have vertical velocity
             self.on_ground = False if self.vy != 0.0 else self.on_ground
 
         # Commit new position
         self.prev_x = self.x
         self.x = new_x
         self.y = new_y
+
+        # If we just landed this frame, start jump cooldown
+        if (not was_on_ground) and self.on_ground:
+            self.jump_cooldown_left_s = cfg.jump_cooldown_s
 
         # End of jump when landing or starting to descend past apex
         if self.is_in_jump and (self.on_ground or self.vy <= 0.0):
@@ -245,7 +295,13 @@ class PlatformerEnv:
 
         # Terminal conditions
         self.timestep += 1
-        reached_goal = self.x >= cfg.x_goal
+        # Success if colliding with raccoon
+        pradius = 0.4  # player radius
+        rx = self.raccoon["x"] if hasattr(self, "raccoon") else cfg.x_goal
+        ry = self.raccoon["y"] if hasattr(self, "raccoon") else 0.6
+        dxg = self.x - rx
+        dyg = (self.y + pradius) - ry
+        reached_goal = (dxg * dxg + dyg * dyg) <= (pradius + cfg.raccoon_radius) ** 2
         fell_out = self.y < -10.0
         time_up = self.timestep >= cfg.episode_length
         left_out = self.x < 0.0
@@ -278,7 +334,7 @@ class PlatformerEnv:
             "succeed": succeed,
             "coins_collected": self.coins_collected_count,
             "coins_total": len(self.coins),
-            "collided_top_y": collided_top_y,
+            "collided_top_y": None,
             "time_remaining": max(0, cfg.episode_length - self.timestep),
             "has_jump_powerup": self.has_jump_powerup,
         }
