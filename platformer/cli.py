@@ -99,14 +99,14 @@ def cmd_render(args: argparse.Namespace) -> int:
         except Exception as e:
             logging.error("Failed to list checkpoints in %s: %s", args.ckpt_dir, e)
             return 1
-    do_render(weights, speed=float(args.speed), show_hitboxes=bool(args.hitboxes), fullscreen=bool(args.fullscreen))
+    do_render(weights, speed=float(args.speed), show_hitboxes=bool(args.hitboxes), fullscreen=bool(args.fullscreen), log_rays=bool(args.log_rays))
     return 0
 
 
 def cmd_play(args: argparse.Namespace) -> int:
     # play is just renderer without policy
     from .renderer import render as do_render
-    do_render([], speed=float(args.speed), show_hitboxes=bool(args.hitboxes), show_intro=True, fullscreen=bool(args.fullscreen))
+    do_render([], speed=float(args.speed), show_hitboxes=bool(args.hitboxes), show_intro=True, fullscreen=bool(args.fullscreen), log_rays=bool(args.log_rays))
     return 0
 
 
@@ -140,12 +140,14 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--speed", type=float, default=1.0, help="Speed multiplier (steps per frame)")
     pr.add_argument("--hitboxes", action='store_true', help="Overlay collision hitboxes")
     pr.add_argument("--fullscreen", action='store_true', help="Open the window in fullscreen (toggle with F11)")
+    pr.add_argument("--log-rays", action='store_true', help="Print raycast hits/distances during playback")
     pr.set_defaults(func=cmd_render)
 
     pp = sub.add_parser("play", help="Play manually (requires pygame)")
     pp.add_argument("--speed", type=float, default=1.0)
     pp.add_argument("--hitboxes", action='store_true', help="Overlay collision hitboxes")
     pp.add_argument("--fullscreen", action='store_true', help="Open the window in fullscreen (toggle with F11)")
+    pp.add_argument("--log-rays", action='store_true', help="Print raycast hits/distances during play")
     pp.set_defaults(func=cmd_play)
 
     return p

@@ -111,6 +111,12 @@ class Renderer:
             self.font_big = pygame.font.SysFont(None, 28)
             # Load static bitmap assets
             assets_dir = os.path.join(os.path.dirname(__file__), 'static')
+            # If optimized versions exist, prefer them
+            try:
+                from .assets import optimize_all
+                # Do not auto-optimize here (could be slow), but we can rely on pre-generated files
+            except Exception:
+                pass
             self._load_bitmaps(assets_dir)
 
     
@@ -135,10 +141,15 @@ class Renderer:
                 "Missing static assets: " + ", ".join(missing) +
                 ". Place PNGs in the 'platformer/static/' directory."
             )
-        self._sprite_base['dino'] = pygame.image.load(dino_path).convert_alpha()
-        self._sprite_base['coin'] = pygame.image.load(coin_path).convert_alpha()
-        self._sprite_base['boots'] = pygame.image.load(boots_path).convert_alpha()
-        self._sprite_base['raccoon'] = pygame.image.load(rac_path).convert_alpha()
+        # Prefer optimized variants if present
+        def pick(path: str) -> str:
+            base, ext = os.path.splitext(path)
+            opt = f"{base}_optimized{ext}"
+            return opt if os.path.exists(opt) else path
+        self._sprite_base['dino'] = pygame.image.load(pick(dino_path)).convert_alpha()
+        self._sprite_base['coin'] = pygame.image.load(pick(coin_path)).convert_alpha()
+        self._sprite_base['boots'] = pygame.image.load(pick(boots_path)).convert_alpha()
+        self._sprite_base['raccoon'] = pygame.image.load(pick(rac_path)).convert_alpha()
 
     def _get_sprite_scaled(self, name: str, target_w: int, target_h: int) -> Any:
         key = (name, max(1, target_w), max(1, target_h))
@@ -225,7 +236,7 @@ class Renderer:
                 fit = None
         return gen, fit
 
-    def render_episode(self, env: PlatformerEnv, policy: Optional[MLPPolicy] = None, fps: int = 30, speed: float = 1.0, label: Optional[str] = None, progress: Optional[tuple[int, int]] = None, show_hitboxes: bool = False) -> None:
+    def render_episode(self, env: PlatformerEnv, policy: Optional[MLPPolicy] = None, fps: int = 30, speed: float = 1.0, label: Optional[str] = None, progress: Optional[tuple[int, int]] = None, show_hitboxes: bool = False, log_rays: bool = False) -> None:
         cfg = env.config
         self._ensure_window(cfg)
         screen = self.screen
@@ -237,6 +248,7 @@ class Renderer:
         done = False
         play_speed = float(speed)
         steps_per_frame = max(1, int(round(play_speed)))
+        celebrate_time_left_s = 0.0
         while not done:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -275,6 +287,8 @@ class Renderer:
                         steps_per_frame = max(1, int(round(play_speed)))
 
             for _ in range(steps_per_frame):
+                if celebrate_time_left_s > 0.0:
+                    break  # freeze physics during celebration
                 if done:
                     break
                 if policy is None:
@@ -297,6 +311,21 @@ class Renderer:
                 else:
                     action = policy.act(obs)
                 obs, reward, done, info = env.step(action)
+                if log_rays and info.get('ray_updated'):
+                    # Pretty print 8 directions with type and distance
+                    tmap = {0.0: 'none', 0.25: 'plat', 0.5: 'coin', 0.75: 'boots', 1.0: 'raccoon'}
+                    types = info.get('ray_types') or []
+                    dists = info.get('ray_dists') or []
+                    dirs = ['0°','45°','90°','135°','180°','225°','270°','315°']
+                    parts = []
+                    for i in range(min(8, len(types), len(dists))):
+                        parts.append(f"{dirs[i]}:{tmap.get(round(float(types[i]),2), str(types[i]))}@{float(dists[i]):.2f}")
+                    print("rays:" , "  ".join(parts))
+                # Start celebration if we just succeeded
+                if done and info.get('succeed') and celebrate_time_left_s <= 0.0:
+                    celebrate_time_left_s = 3.0
+                    # Continue rendering without further stepping
+                    done = False
 
             # Update facing based on horizontal velocity
             if env.vx < -0.05:
@@ -409,6 +438,22 @@ class Renderer:
                 hr = pygame.Rect(rcx - int((rw * self.scale_x) * 0.5), rcy - int((rh * self.scale_y) * 0.5), int(rw * self.scale_x), int(rh * self.scale_y))
                 pygame.draw.rect(screen, (255, 255, 255), hr, 1)
 
+            # Heart celebration above raccoon
+            if celebrate_time_left_s > 0.0 or (info.get('succeed') if 'info' in locals() else False):
+                heart_offset = rh * 0.9
+                hx, hy = self._world_to_screen(rx, ry + heart_offset, cfg.height)
+                # Size heart relative to raccoon height in pixels
+                size_px = int(max(16, rh * self._px_scale() * 0.8))
+                # Draw a big red heart
+                col = (255, 0, 64)
+                pygame.draw.circle(screen, col, (hx - size_px // 3, hy), size_px // 3)
+                pygame.draw.circle(screen, col, (hx + size_px // 3, hy), size_px // 3)
+                points = [(hx - size_px // 1.5, hy), (hx + size_px // 1.5, hy), (hx, hy + size_px)]
+                pygame.draw.polygon(screen, col, points)
+                # Optional subtle outline for visibility
+                pygame.draw.circle(screen, (255, 255, 255), (hx - size_px // 3, hy), size_px // 3, 1)
+                pygame.draw.circle(screen, (255, 255, 255), (hx + size_px // 3, hy), size_px // 3, 1)
+
             # HUD: coins, time (seconds), powerup
             coins_text = f"Coins: {info.get('coins_collected', 0)}/{info.get('coins_total', 0)}"
             time_left_s = max(0.0, float(info.get('time_remaining', 0)) * float(cfg.dt))
@@ -417,6 +462,30 @@ class Renderer:
             hud_text = f"{coins_text}  {time_text}  {pwr_text}"
             text_surface = self.font.render(hud_text, True, (230, 230, 230))
             screen.blit(text_surface, (10, 10))
+
+            # Visualize rays when requested
+            if log_rays and info.get('ray_types') is not None and info.get('ray_dists') is not None:
+                max_dist = float(getattr(cfg, 'raycast_max_dist', 30.0))
+                origin_x = env.x
+                origin_y = env.y + float(getattr(cfg, 'player_h', 0.8)) * 0.5
+                types = list(info.get('ray_types'))
+                dists = list(info.get('ray_dists'))
+                colors = {
+                    0.0: (120, 120, 120),   # none
+                    0.25: (160, 160, 160),  # platform
+                    0.5: (255, 220, 0),     # coin
+                    0.75: (0, 220, 255),    # boots
+                    1.0: (255, 255, 255),   # raccoon
+                }
+                for i in range(min(8, len(types), len(dists))):
+                    ang = math.radians(45.0 * i)
+                    dist = float(dists[i]) * max_dist
+                    tx = origin_x + math.cos(ang) * dist
+                    ty = origin_y + math.sin(ang) * dist
+                    sx1, sy1 = self._world_to_screen(origin_x, origin_y, cfg.height)
+                    sx2, sy2 = self._world_to_screen(tx, ty, cfg.height)
+                    col = colors.get(float(round(types[i], 2)), (180, 180, 180))
+                    pygame.draw.line(screen, col, (sx1, sy1), (sx2, sy2), 2)
 
             # Progress top-right (index/total) during playback
             if progress is not None:
@@ -449,15 +518,22 @@ class Renderer:
             pygame.display.flip()
             self.clock.tick(fps)
 
+            # Count down celebration time and exit after delay
+            if celebrate_time_left_s > 0.0:
+                celebrate_time_left_s = max(0.0, celebrate_time_left_s - (1.0 / max(1, fps)))
+                if celebrate_time_left_s <= 0.0:
+                    # End loop after showing heart
+                    break
 
-def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False, show_intro: bool = False, fullscreen: bool = False) -> None:
+
+def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False, show_intro: bool = False, fullscreen: bool = False, log_rays: bool = False) -> None:
     env = PlatformerEnv(GameConfig())
     renderer = Renderer(fullscreen=fullscreen)
 
     if not weights_paths:
         if show_intro:
             renderer.show_intro(env)
-        renderer.render_episode(env, None, speed=speed, show_hitboxes=show_hitboxes)
+        renderer.render_episode(env, None, speed=speed, show_hitboxes=show_hitboxes, log_rays=log_rays)
         renderer.close()
         return
 
@@ -476,6 +552,6 @@ def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_h
         policy = MLPPolicy(cfg)
         flat = np.load(path)
         policy.set_flat(flat)
-        renderer.render_episode(env, policy, speed=speed, label=path, progress=(idx, total), show_hitboxes=show_hitboxes)
+        renderer.render_episode(env, policy, speed=speed, label=path, progress=(idx, total), show_hitboxes=show_hitboxes, log_rays=log_rays)
 
     renderer.close()

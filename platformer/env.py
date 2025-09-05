@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Any
+import math
 import numpy as np
 
 
@@ -37,7 +38,6 @@ def entities_collide(a: GameEntity, b: GameEntity) -> bool:
 class GameConfig:
     width: float = 50.0  # viewport width in world units (one screen)
     height: float = 10.0
-    x_goal: float = 40.0  # will be overridden based on level_screens
     level_screens: int = 2  # number of screens the level spans horizontally
 
     # Simulation timing
@@ -134,6 +134,15 @@ class GameConfig:
     # Cooldown after landing before another jump is allowed
     jump_cooldown_s: float = 0.10
 
+    # Raycasting for observations
+    raycast_enabled: bool = True
+    raycast_max_dist: float = 30.0
+    raycast_interval_s: float = 0.25
+
+    # Exploration bitfield observation (8x8 grid across the map)
+    exploration_grid_size: int = 8
+    exploration_enabled: bool = True
+
     def __post_init__(self) -> None:
         # Derive dt and episode_length from tickrate and episode time
         if self.tickrate_hz <= 0.0:
@@ -149,9 +158,6 @@ class GameConfig:
             # the bottom row corresponds to y=0 and aligns with the window bottom.
             self.width = float(ncols) * float(self.tile_size)
             self.height = float(nrows) * float(self.tile_size)
-        # Compute level length and end goal position
-        level_length = max(self.width * max(1, int(self.level_screens)), self.width)
-        self.x_goal = level_length - 2.0
         if not self.platforms:
             # Start with ground only; rest will be procedurally generated in env.reset
             self.platforms = [
@@ -187,7 +193,7 @@ class PlatformerEnv:
         10: run + left + jump
         11: run + right + jump
     Observation (np.float32):
-        [x/x_goal, y/height, vx/max_speed, vy/jump_velocity, on_ground(0/1),
+        [x/width, y/height, vx/max_speed, vy/jump_velocity, on_ground(0/1),
          coins_collected/num_coins, time_remaining_ratio]
     """
 
@@ -203,7 +209,11 @@ class PlatformerEnv:
 
     @property
     def observation_size(self) -> int:
-        return 7
+        # Base 7 + (8 directions * [type, distance]) + 1 staleness indicator when raycasting enabled
+        base = 7 + (17 if getattr(self.config, 'raycast_enabled', True) else 0)
+        if getattr(self.config, 'exploration_enabled', True):
+            base += 64
+        return base
 
     def reset(self) -> np.ndarray:
         self.timestep = 0
@@ -214,6 +224,17 @@ class PlatformerEnv:
         self.on_ground = True
         self.prev_x = self.x
         self.done = False
+
+        # Raycast cache/state
+        if self.config.raycast_enabled:
+            self._ray_obs_types: List[float] = [0.0] * 8
+            self._ray_obs_dists: List[float] = [1.0] * 8
+            # Trigger an immediate raycast on first frame after reset
+            self._raycast_time_left_s: float = 0.0
+
+        # Exploration bitfield state
+        if self.config.exploration_enabled:
+            self._explore_bits: int = 0  # 64-bit bitfield (use Python int)
 
         # Deterministically (re)generate platforms across the full level, or from ASCII map
         cfg = self.config
@@ -472,6 +493,10 @@ class PlatformerEnv:
         self.x = new_x
         self.y = new_y
 
+        # Update exploration bits
+        if cfg.exploration_enabled:
+            self._mark_explored(self.x, self.y)
+
         # If we just landed this frame, start jump cooldown
         if (not was_on_ground) and self.on_ground:
             self.jump_cooldown_left_s = cfg.jump_cooldown_s
@@ -480,6 +505,20 @@ class PlatformerEnv:
         if self.is_in_jump and (self.on_ground or self.vy <= 0.0):
             # Once descending, no further cut effects matter this jump
             self.is_in_jump = False
+
+        # Raycast update cadence
+        ray_updated = False
+        if cfg.raycast_enabled:
+            # Decrement and update when timer elapses
+            if not hasattr(self, '_raycast_time_left_s'):
+                self._raycast_time_left_s = 0.0
+            self._raycast_time_left_s = float(self._raycast_time_left_s) - dt
+            if self._raycast_time_left_s <= 0.0:
+                types, dists = self._compute_raycast_observations()
+                self._ray_obs_types = types
+                self._ray_obs_dists = dists
+                self._raycast_time_left_s += float(max(1e-6, cfg.raycast_interval_s))
+                ray_updated = True
 
         # Coin collection after movement
         coin_reward_total = 0.0
@@ -539,6 +578,10 @@ class PlatformerEnv:
             "collided_top_y": None,
             "time_remaining": max(0, cfg.episode_length - self.timestep),
             "has_jump_powerup": self.has_jump_powerup,
+            # Raycast diagnostics for renderer/UI consumers
+            "ray_updated": ray_updated if cfg.raycast_enabled else False,
+            "ray_types": (self._ray_obs_types if cfg.raycast_enabled and hasattr(self, '_ray_obs_types') else None),
+            "ray_dists": (self._ray_obs_dists if cfg.raycast_enabled and hasattr(self, '_ray_obs_dists') else None),
         }
         return obs, float(reward), self.done, info
 
@@ -550,16 +593,31 @@ class PlatformerEnv:
         cfg = self.config
         coins_total = max(1, len(self.coins)) if hasattr(self, "coins") else 1
         time_remaining_ratio = 1.0 - (self.timestep / float(max(1, cfg.episode_length)))
-        obs = np.array([
-            np.clip(self.x / max(cfg.x_goal, 1e-6), 0.0, 1.0),
+        base = [
+            np.clip(self.x / max(cfg.width, 1e-6), 0.0, 1.0),
             np.clip(self.y / max(cfg.height, 1e-6), -1.0, 2.0),
             np.clip(self.vx / max(cfg.max_speed, 1e-6), -1.0, 1.0),
             np.clip(self.vy / max(cfg.jump_velocity, 1e-6), -2.0, 2.0),
             1.0 if self.on_ground else 0.0,
             float(self.coins_collected_count) / float(coins_total),
             np.clip(time_remaining_ratio, 0.0, 1.0),
-        ], dtype=np.float32)
-        return obs
+        ]
+        if cfg.raycast_enabled:
+            types = getattr(self, '_ray_obs_types', [0.0] * 8)
+            dists = getattr(self, '_ray_obs_dists', [1.0] * 8)
+            base.extend(types)
+            base.extend(dists)
+            # Add normalized "age" of the raycast: 0 fresh (cast this frame), 1 stale (just before next cast)
+            interval = float(max(1e-6, getattr(cfg, 'raycast_interval_s', 0.25)))
+            time_left = float(getattr(self, '_raycast_time_left_s', 0.0))
+            age_ratio = 1.0 - float(max(0.0, min(1.0, time_left / interval)))
+            base.append(age_ratio)
+        if cfg.exploration_enabled:
+            bits = getattr(self, '_explore_bits', 0)
+            # Append 64 binary features (0/1) row-major from bottom to top
+            for i in range(64):
+                base.append(1.0 if (bits >> i) & 1 else 0.0)
+        return np.array(base, dtype=np.float32)
 
     def copy(self) -> "PlatformerEnv":
         # Lightweight copy for parallel experimentation if needed
@@ -582,5 +640,134 @@ class PlatformerEnv:
         new_env.jump_hold_time_s = self.jump_hold_time_s
         new_env.jump_cut_applied = self.jump_cut_applied
         return new_env
+
+    # --------------------------- Raycasting helpers ---------------------------
+    def _compute_raycast_observations(self) -> Tuple[List[float], List[float]]:
+        """Cast 8 rays (0..315 degrees every 45 deg) from player center.
+        Returns two lists length 8 each: types (0..1) and normalized distances (0..1).
+        Types mapping (normalized): 0.0 none, 0.25 platform, 0.5 coin, 0.75 powerup, 1.0 raccoon.
+        Distances are clipped to raycast_max_dist and divided by that value.
+        """
+        cfg = self.config
+        origin_x = self.x
+        origin_y = self.y + cfg.player_h * 0.5
+        max_dist = float(max(1e-6, cfg.raycast_max_dist))
+        type_map = {
+            'none': 0.0,
+            'platform': 0.25,
+            'coin': 0.5,
+            'boots': 0.75,
+            'raccoon': 1.0,
+        }
+        hit_types: List[float] = []
+        hit_dists: List[float] = []
+        # Identify platform we are currently standing on (if any)
+        under_plat: Optional[Tuple[float, float, float, float]] = None
+        for (px, py, pw, ph) in cfg.platforms:
+            top = py + ph
+            if abs(self.y - top) < 1e-6 and (self.x >= px - 1e-6) and (self.x <= px + pw + 1e-6):
+                under_plat = (px, py, pw, ph)
+                break
+
+        for i in range(8):
+            ang = math.radians(45.0 * i)
+            dx = math.cos(ang)
+            dy = math.sin(ang)
+            t_best = None
+            t_type: str = 'none'
+            # platforms
+            for (px, py, pw, ph) in cfg.platforms:
+                t = self._ray_intersect_aabb(origin_x, origin_y, dx, dy, px, py, px + pw, py + ph)
+                # Ignore immediate self-floor hit within a small epsilon distance
+                if under_plat is not None and (px, py, pw, ph) == under_plat and t is not None:
+                    epsilon = float(getattr(cfg, 'tile_size', 1.0)) * 0.5
+                    if t < epsilon:
+                        t = None
+                if t is not None and 0.0 <= t <= max_dist:
+                    if t_best is None or t < t_best:
+                        t_best = t
+                        t_type = 'platform'
+            # coins
+            for coin in getattr(self, 'coins', []):
+                if not coin.active:
+                    continue
+                t = self._ray_intersect_aabb(origin_x, origin_y, dx, dy, coin.x - coin.w * 0.5, coin.y - coin.h * 0.5, coin.x + coin.w * 0.5, coin.y + coin.h * 0.5)
+                if t is not None and 0.0 <= t <= max_dist:
+                    if t_best is None or t < t_best:
+                        t_best = t
+                        t_type = 'coin'
+            # powerup
+            if getattr(self, 'powerup', None) and self.powerup.active:
+                pu = self.powerup
+                # Generous expansion so horizontal rays at torso height can still hit
+                tile = float(getattr(cfg, 'tile_size', 1.0))
+                expand_x = max(tile * 0.4, cfg.player_w * 0.25)
+                expand_y = max(tile * 0.9, cfg.player_h * 0.6)
+                t = self._ray_intersect_aabb(
+                    origin_x, origin_y, dx, dy,
+                    pu.x - pu.w * 0.5 - expand_x,
+                    pu.y - pu.h * 0.5 - expand_y,
+                    pu.x + pu.w * 0.5 + expand_x,
+                    pu.y + pu.h * 0.5 + expand_y,
+                )
+                if t is not None and 0.0 <= t <= max_dist:
+                    if t_best is None or t < t_best:
+                        t_best = t
+                        t_type = 'boots'
+            # raccoon
+            rac = getattr(self, 'raccoon', None)
+            if rac is not None:
+                t = self._ray_intersect_aabb(origin_x, origin_y, dx, dy, rac.x - rac.w * 0.5, rac.y - rac.h * 0.5, rac.x + rac.w * 0.5, rac.y + rac.h * 0.5)
+                if t is not None and 0.0 <= t <= max_dist:
+                    if t_best is None or t < t_best:
+                        t_best = t
+                        t_type = 'raccoon'
+            if t_best is None:
+                hit_types.append(type_map['none'])
+                hit_dists.append(1.0)
+            else:
+                hit_types.append(type_map[t_type])
+                hit_dists.append(float(max(0.0, min(1.0, t_best / max_dist))))
+        return hit_types, hit_dists
+
+    @staticmethod
+    def _ray_intersect_aabb(ox: float, oy: float, dx: float, dy: float, minx: float, miny: float, maxx: float, maxy: float) -> Optional[float]:
+        """Ray (origin + t*dir) vs AABB intersection using slabs. Returns t or None."""
+        tmin = -float('inf')
+        tmax = float('inf')
+        # X slabs
+        if abs(dx) < 1e-9:
+            if ox < minx or ox > maxx:
+                return None
+        else:
+            tx1 = (minx - ox) / dx
+            tx2 = (maxx - ox) / dx
+            tmin = max(tmin, min(tx1, tx2))
+            tmax = min(tmax, max(tx1, tx2))
+        # Y slabs
+        if abs(dy) < 1e-9:
+            if oy < miny or oy > maxy:
+                return None
+        else:
+            ty1 = (miny - oy) / dy
+            ty2 = (maxy - oy) / dy
+            tmin = max(tmin, min(ty1, ty2))
+            tmax = min(tmax, max(ty1, ty2))
+        if tmax < 0 or tmin > tmax:
+            return None
+        # Hit at nearest positive t
+        thit = tmin if tmin >= 0 else tmax
+        return thit if thit >= 0 else None
+
+    # ------------------------ Exploration bitfield helpers -------------------
+    def _mark_explored(self, x: float, y: float) -> None:
+        """Mark the 8x8 sector containing (x,y) as explored in the 64-bit field."""
+        grid = int(max(1, getattr(self.config, 'exploration_grid_size', 8)))
+        cell_w = float(self.config.width) / float(grid)
+        cell_h = float(self.config.height) / float(grid)
+        cx = int(min(grid - 1, max(0, int(x / max(1e-6, cell_w)))))
+        cy = int(min(grid - 1, max(0, int(y / max(1e-6, cell_h)))))
+        idx = cy * grid + cx  # row-major, bottom row cy=0
+        self._explore_bits |= (1 << idx)
 
  
