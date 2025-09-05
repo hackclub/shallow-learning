@@ -8,6 +8,31 @@ import numpy as np
 Platform = Tuple[float, float, float, float]  # (x, y, w, h) in world units, y upwards
 
 
+# Common entity and collider helpers
+@dataclass
+class GameEntity:
+    kind: str
+    x: float
+    y: float
+    # Axis-aligned rectangle size in world units, centered at (x, y)
+    w: float
+    h: float
+    active: bool = True
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+def entities_collide(a: GameEntity, b: GameEntity) -> bool:
+    """Axis-aligned rectangle overlap test using entity centers and sizes."""
+    a_left = a.x - a.w * 0.5
+    a_right = a.x + a.w * 0.5
+    a_bottom = a.y - a.h * 0.5
+    a_top = a.y + a.h * 0.5
+    b_left = b.x - b.w * 0.5
+    b_right = b.x + b.w * 0.5
+    b_bottom = b.y - b.h * 0.5
+    b_top = b.y + b.h * 0.5
+    return (a_right > b_left) and (a_left < b_right) and (a_top > b_bottom) and (a_bottom < b_top)
+
 @dataclass
 class GameConfig:
     width: float = 50.0  # viewport width in world units (one screen)
@@ -17,21 +42,69 @@ class GameConfig:
 
     # Simulation timing
     tickrate_hz: float = 30.0  # simulation updates per second
-    episode_time_s: float = 20.0  # episode duration in seconds
+    episode_time_s: float = 60.0  # episode duration in seconds
     dt: float = 0.1
     gravity: float = -25.0  # y-axis points upward
     move_accel: float = 120.0
     max_speed: float = 8.0
-    jump_velocity: float = 10.0
+    jump_velocity: float = 15.0
     friction: float = 8.0
 
     episode_length: int = 250  # derived from episode_time_s * tickrate_hz
 
     # Platforms: specify as list of (x, y, w, h), y upwards
     platforms: List[Platform] = field(default_factory=list)
+    # ASCII level map used as the primary level definition. Each character is
+    # one tile of size tile_size. Legend: '#': platform, 'P': player spawn,
+    # 'C': coin, 'B': boots, 'R': raccoon, '.' or ' ' empty.
+    level_map: List[str] = field(default_factory=lambda: [
+        "###################################################",
+        "#....C......C.......C........................######",
+        "#.............................................#####",
+        "#.C......C.......C......C......................####",
+        "#################################...............###",
+        "#..............................C#................##",
+        "#..............................C#.................#",
+        "#............................####.................#",
+        "#..............................................C..#",
+        "#.................................................#",
+        "#.................................................#",
+        "#.......................C.........................#",
+        "#.......###########################################",
+        "#................................................C#",
+        "#..............................C.C.C.C.C.C.......C#",
+        "#C....................###.......C.C.C.C.C........C#",
+        "#................................................C#",
+        "#................#..............................###",
+        "#.................................................#",
+        "#.....#..............#............................#",
+        "#................#................................#",
+        "#.................................................#",
+        "#..............................C..................#",
+        "#................############################.....#", 
+        "#................#................................#",
+        "#C............C..#................................#",
+        "#C...............#...................#............#",
+        "###..............#...................#.CCCCC......#",
+        "#.......................C............#.CCCCC......#",
+        "#....................................#.CCCCC......#",
+        "#....................................##############",
+        "#.................................................#",
+        "#...........################......................#",
+        "#..........................#......................#",
+        "#..........................#......................#",
+        "#..........................################.......#",
+        "#.........................................#.......#",
+        "#........P................................#.......#",
+        "#....#########............................#...R.. #",
+        "#....#########..................B.........#.......#",
+        "###################################################"
+    ])
+    tile_size: float = 1.0
 
     # Coins and rewards
-    coin_radius: float = 0.5
+    coin_w: float = 1.0
+    coin_h: float = 1.0
     coin_reward: float = 1000.0
     finish_speed_bonus: float = 50.0  # bonus scaled by remaining time ratio
     finish_base_bonus: float = 5.0  # flat bonus on finish
@@ -42,14 +115,19 @@ class GameConfig:
     air_control_scale: float = 0.333  # fraction of horizontal accel allowed while airborne
     # Running (Mario-style): increases max speed while on ground
     run_speed_multiplier: float = 1.7
+    # Player collider size (rect)
+    player_w: float = 1.5
+    player_h: float = 3
 
     # Powerup: jump multiplier near goal
-    powerup_radius: float = 0.1
+    powerup_w: float = 2
+    powerup_h: float = 1
     powerup_jump_multiplier: float = 2.0
     powerup_offset_x: float = 1.5  # place this far before goal line
-    powerup_height: float = 1.2     # y above ground
+    powerup_height: float = 0     # y above ground
     # Raccoon goal entity
-    raccoon_radius: float = 0.5
+    raccoon_w: float = 1.5
+    raccoon_h: float = 3.0
 
     # Variable jump (pressure-sensitive): max time the jump can be held
     variable_jump_max_hold_s: float = 0.333
@@ -62,6 +140,15 @@ class GameConfig:
             self.tickrate_hz = 50.0
         self.dt = 1.0 / float(self.tickrate_hz)
         self.episode_length = int(max(1, round(self.episode_time_s * self.tickrate_hz)))
+        # If ASCII map provided, ensure world dimensions accommodate it
+        if self.level_map:
+            rows = self.level_map
+            nrows = len(rows)
+            ncols = max((len(r) for r in rows), default=0)
+            # Use the ASCII map dimensions as the world dimensions exactly so
+            # the bottom row corresponds to y=0 and aligns with the window bottom.
+            self.width = float(ncols) * float(self.tile_size)
+            self.height = float(nrows) * float(self.tile_size)
         # Compute level length and end goal position
         level_length = max(self.width * max(1, int(self.level_screens)), self.width)
         self.x_goal = level_length - 2.0
@@ -70,6 +157,15 @@ class GameConfig:
             self.platforms = [
                 (-1e6, -0.5, 2e6, 0.5),  # infinite ground strip at y=0 top
             ]
+        # Ensure positive sizes
+        self.player_w = max(1e-6, float(self.player_w))
+        self.player_h = max(1e-6, float(self.player_h))
+        self.coin_w = max(1e-6, float(self.coin_w))
+        self.coin_h = max(1e-6, float(self.coin_h))
+        self.powerup_w = max(1e-6, float(self.powerup_w))
+        self.powerup_h = max(1e-6, float(self.powerup_h))
+        self.raccoon_w = max(1e-6, float(self.raccoon_w))
+        self.raccoon_h = max(1e-6, float(self.raccoon_h))
 
 
 class PlatformerEnv:
@@ -84,6 +180,12 @@ class PlatformerEnv:
         3: jump
         4: left + jump
         5: right + jump
+        6: run
+        7: run + left
+        8: run + right
+        9: run + jump
+        10: run + left + jump
+        11: run + right + jump
     Observation (np.float32):
         [x/x_goal, y/height, vx/max_speed, vy/jump_velocity, on_ground(0/1),
          coins_collected/num_coins, time_remaining_ratio]
@@ -93,6 +195,7 @@ class PlatformerEnv:
         self.config = config or GameConfig()
         self.rng = np.random.default_rng(seed)
         self.reset()
+
 
     @property
     def action_size(self) -> int:
@@ -112,48 +215,131 @@ class PlatformerEnv:
         self.prev_x = self.x
         self.done = False
 
-        # Deterministically (re)generate platforms across the full level
-        level_length = self.config.width * max(1, int(self.config.level_screens))
-        plats: List[Platform] = [(-1e6, -0.5, 2e6, 0.5)]
-        widths = [2.0, 4.0, 8.0]  # 1x2, 1x4, 1x8 (height fixed at 1)
-        ph = 1.0
-        top_levels = [1.0, 3.0, 5.0, 7.0]  # preset platform top heights (top edges)
-        # Place platforms at regular intervals for full determinism
-        spacing = 10.0
-        i = 0
-        x = 2.0
-        while x < (level_length - 2.0):
-            pw = widths[i % len(widths)]
-            top_y = top_levels[i % len(top_levels)]
-            px = min(max(2.0, x), level_length - pw - 2.0)
-            py = top_y - ph
-            plats.append((px, py, pw, ph))
-            i += 1
-            x += spacing
-        self.config.platforms = plats
+        # Deterministically (re)generate platforms across the full level, or from ASCII map
+        cfg = self.config
+        level_length = cfg.width * max(1, int(cfg.level_screens))
+        # If using ASCII map, do NOT add the infinite ground; the bottom row of
+        # tiles defines the floor. Otherwise, retain the infinite ground strip.
+        plats: List[Platform] = [] if cfg.level_map else [(-1e6, -0.5, 2e6, 0.5)]
+        coins_from_map: List[GameEntity] = []
+        powerup_from_map: Optional[GameEntity] = None
+        raccoon_from_map: Optional[GameEntity] = None
+        player_spawn: Optional[Tuple[float, float]] = None
+        if cfg.level_map:
+            rows = cfg.level_map
+            nrows = len(rows)
+            ncols = max((len(r) for r in rows), default=0)
+            tile = float(cfg.tile_size)
+            def ch_at(r: int, c: int) -> str:
+                if r < 0 or r >= nrows or c < 0 or c >= len(rows[r]):
+                    return ' '
+                return rows[r][c]
+            for r in range(nrows):
+                y_bottom = cfg.height - (r + 1) * tile
+                c = 0
+                while c < ncols:
+                    ch = ch_at(r, c)
+                    if ch == '#':
+                        start = c
+                        while c + 1 < ncols and ch_at(r, c + 1) == '#':
+                            c += 1
+                        end = c
+                        px = start * tile
+                        pw = (end - start + 1) * tile
+                        py = y_bottom
+                        ph = tile
+                        plats.append((px, py, pw, ph))
+                    elif ch == 'C':
+                        cx = (c + 0.5) * tile
+                        cy = y_bottom + 0.5 * tile
+                        coins_from_map.append(GameEntity(kind="coin", x=cx, y=cy, w=cfg.coin_w, h=cfg.coin_h))
+                    elif ch == 'B':
+                        bx = (c + 0.5) * tile
+                        by = y_bottom + 0.5 * tile
+                        powerup_from_map = GameEntity(kind="boots", x=bx, y=by, w=cfg.powerup_w, h=cfg.powerup_h, active=True)
+                    elif ch == 'R':
+                        rx = (c + 0.5) * tile
+                        ry = y_bottom + 0.5 * tile
+                        raccoon_from_map = GameEntity(kind="raccoon", x=rx, y=ry, w=cfg.raccoon_w, h=cfg.raccoon_h)
+                    elif ch == 'P':
+                        px = (c + 0.5) * tile
+                        py_spawn = y_bottom
+                        player_spawn = (px, py_spawn)
+                    c += 1
+            self.config.platforms = plats
+        else:
+            widths = [2.0, 4.0, 8.0]  # 1x2, 1x4, 1x8 (height fixed at 1)
+            ph = 1.0
+            top_levels = [1, 1.25, 1.75, 5]
+            spacing = 10.0
+            i = 0
+            x = 2.0
+            while x < (level_length - 2.0):
+                if x < 1:
+                    x += spacing
+                    continue
+                pw = widths[i % len(widths)]
+                top_y = top_levels[i % len(top_levels)]
+                px = min(max(2.0, x), level_length - pw - 2.0)
+                py = top_y - ph
+                plats.append((px, py, pw, ph))
+                i += 1
+                x += spacing
+            self.config.platforms = plats
 
-        # Coins: one centered on top of each non-ground platform
-        self.coins: List[Dict[str, Any]] = []
-        for (px, py, pw, ph) in self.config.platforms[1:]:  # skip ground
-            cx = px + pw * 0.5
-            cy = py + ph + self.config.coin_radius + 0.12
-            self.coins.append({"x": cx, "y": cy, "collected": False})
+        # Player entity (center anchored at collider center)
+        if cfg.level_map and player_spawn is not None:
+            self.x, self.y = float(player_spawn[0]), float(player_spawn[1])
+        self.player_entity = GameEntity(
+            kind="player",
+            x=self.x,
+            y=self.y + self.config.player_h * 0.5,
+            w=self.config.player_w,
+            h=self.config.player_h,
+        )
 
-        # Jump powerup near goal
+        # Coins: from ASCII map if available; otherwise place on platforms
+        self.coins: List[GameEntity] = []
+        if cfg.level_map and coins_from_map:
+            self.coins = coins_from_map
+        else:
+            for (px, py, pw, ph) in self.config.platforms[1:]:  # skip ground
+                cx = px + pw * 0.5
+                cy = py + ph + (self.config.coin_h * 0.5) + 0.12
+                self.coins.append(GameEntity(
+                    kind="coin",
+                    x=cx,
+                    y=cy,
+                    w=self.config.coin_w,
+                    h=self.config.coin_h,
+                ))
+
+        # Jump powerup
         self.has_jump_powerup: bool = False
-        # Place in the first screen near the ground
         mid_x = self.config.width * 0.5
-        self.powerup = {
-            "x": mid_x,
-            "y": 0.6,  # slightly above ground to be collectible
-            "collected": False,
-        }
+        if cfg.level_map and powerup_from_map is not None:
+            self.powerup = powerup_from_map
+        else:
+            self.powerup = GameEntity(
+                kind="boots",
+                x=mid_x,
+                y=0.6,
+                w=self.config.powerup_w,
+                h=self.config.powerup_h,
+                active=True,
+            )
 
-        # Raccoon goal placed at far right (collision center at (x,y))
-        self.raccoon = {
-            "x": level_length - 2.0,
-            "y": 0.6,
-        }
+        # Raccoon goal
+        if cfg.level_map and raccoon_from_map is not None:
+            self.raccoon = raccoon_from_map
+        else:
+            self.raccoon = GameEntity(
+                kind="raccoon",
+                x=level_length - 2.0,
+                y=0.6,
+                w=self.config.raccoon_w,
+                h=self.config.raccoon_h,
+            )
 
         # Variable jump state
         self.is_in_jump = False
@@ -224,8 +410,9 @@ class PlatformerEnv:
         self.vx = float(np.clip(self.vx, -max_speed_now, max_speed_now))
         self.vy += cfg.gravity * dt
 
-        # Axis-separated integration with full-rect collisions (AABB approx of player circle)
-        pradius = 0.4
+        # Axis-separated integration with rectangle player collider
+        player_half_w = cfg.player_w * 0.5
+        player_h = cfg.player_h
         was_on_ground = self.on_ground
 
         # Horizontal move and resolve against platform sides
@@ -237,17 +424,17 @@ class PlatformerEnv:
             top = py + ph
             # check vertical overlap of player's AABB with platform
             player_bottom = self.y
-            player_top = self.y + 2.0 * pradius
+            player_top = self.y + player_h
             vertical_overlap = (player_top > bottom) and (player_bottom < top)
             if not vertical_overlap:
                 continue
             # moving right into left side
-            if (self.x + pradius) <= left and (new_x + pradius) > left:
-                new_x = left - pradius
+            if (self.x + player_half_w) <= left and (new_x + player_half_w) > left:
+                new_x = left - player_half_w
                 self.vx = 0.0
             # moving left into right side
-            if (self.x - pradius) >= right and (new_x - pradius) < right:
-                new_x = right + pradius
+            if (self.x - player_half_w) >= right and (new_x - player_half_w) < right:
+                new_x = right + player_half_w
                 self.vx = 0.0
 
         # Vertical move and resolve against platform tops/bottoms
@@ -259,14 +446,14 @@ class PlatformerEnv:
             bottom = py
             top = py + ph
             # check horizontal overlap of player's AABB with platform
-            player_left = new_x - pradius
-            player_right = new_x + pradius
+            player_left = new_x - player_half_w
+            player_right = new_x + player_half_w
             horizontal_overlap = (player_right > left) and (player_left < right)
             if not horizontal_overlap:
                 continue
             # moving up into platform bottom (head hit)
-            if (self.y + 2.0 * pradius) <= bottom and (new_y + 2.0 * pradius) > bottom:
-                new_y = bottom - 2.0 * pradius
+            if (self.y + player_h) <= bottom and (new_y + player_h) > bottom:
+                new_y = bottom - player_h
                 self.vy = 0.0
                 self.is_in_jump = False
             # moving down onto platform top (landing)
@@ -296,35 +483,27 @@ class PlatformerEnv:
 
         # Coin collection after movement
         coin_reward_total = 0.0
-        pradius = 0.4  # player render radius used in renderer
+        # keep player entity in sync with physics position
+        self.player_entity.x = self.x
+        self.player_entity.y = self.y + cfg.player_h * 0.5
         for coin in self.coins:
-            if coin["collected"]:
+            if not coin.active:
                 continue
-            dx = self.x - coin["x"]
-            dy = (self.y + pradius) - coin["y"]
-            dist2 = dx * dx + dy * dy
-            # Respect both colliders' radii
-            if dist2 <= (pradius + cfg.coin_radius) ** 2:
-                coin["collected"] = True
+            if entities_collide(self.player_entity, coin):
+                coin.active = False
                 coin_reward_total += cfg.coin_reward
 
         # Powerup collection
-        if self.powerup and not self.powerup["collected"]:
-            dx = self.x - self.powerup["x"]
-            dy = (self.y + pradius) - self.powerup["y"]
-            if dx * dx + dy * dy <= (pradius + cfg.powerup_radius) ** 2:
-                self.powerup["collected"] = True
+        if self.powerup and self.powerup.active:
+            if entities_collide(self.player_entity, self.powerup):
+                self.powerup.active = True  # stays in world but flagged active; no need to draw after pickup handled by renderer
+                self.powerup.active = False
                 self.has_jump_powerup = True
 
         # Terminal conditions
         self.timestep += 1
         # Success if colliding with raccoon
-        pradius = 0.4  # player radius
-        rx = self.raccoon["x"] if hasattr(self, "raccoon") else cfg.x_goal
-        ry = self.raccoon["y"] if hasattr(self, "raccoon") else 0.6
-        dxg = self.x - rx
-        dyg = (self.y + pradius) - ry
-        reached_goal = (dxg * dxg + dyg * dyg) <= (pradius + cfg.raccoon_radius) ** 2
+        reached_goal = entities_collide(self.player_entity, self.raccoon)
         fell_out = self.y < -10.0
         time_up = self.timestep >= cfg.episode_length
         left_out = self.x < 0.0
@@ -365,7 +544,7 @@ class PlatformerEnv:
 
     @property
     def coins_collected_count(self) -> int:
-        return sum(1 for c in self.coins if c["collected"]) if hasattr(self, "coins") else 0
+        return sum(1 for c in self.coins if not c.active) if hasattr(self, "coins") else 0
 
     def _get_observation(self) -> np.ndarray:
         cfg = self.config
@@ -403,3 +582,5 @@ class PlatformerEnv:
         new_env.jump_hold_time_s = self.jump_hold_time_s
         new_env.jump_cut_applied = self.jump_cut_applied
         return new_env
+
+ 

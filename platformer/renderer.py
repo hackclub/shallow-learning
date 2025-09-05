@@ -17,7 +17,7 @@ from .policy import MLPPolicy, MLPPolicyConfig
 
 
 class Renderer:
-    def __init__(self, window_width: int = 800, window_height: int = 600) -> None:
+    def __init__(self, window_width: int = 800, window_height: int = 600, fullscreen: bool = False) -> None:
         if pygame is None:
             raise RuntimeError("pygame not installed. Run `pip install pygame`.")
         self.clock = pygame.time.Clock()
@@ -25,15 +25,20 @@ class Renderer:
         self.font = None
         self.font_big = None
         self._size = (window_width, window_height)
+        self._fullscreen = fullscreen
         self.scale_x = 1.0
         self.scale_y = 1.0
+        self._offset_x_px = 0
+        self._offset_y_px = 0
         # sprite caches
         self._sprite_base: Dict[str, Any] = {}
         self._sprite_scaled: Dict[Tuple[str, int, int], Any] = {}
-        # character facing state
-        self._face_left = False
+        # character facing state (default facing right: base sprite faces left, so flip)
+        self._face_left = True
         # camera state (world x of left edge)
         self._camera_x = 0.0
+        # content ratio cache (visible alpha bounds / surface size)
+        self._content_ratio: Dict[str, Tuple[float, float]] = {}
 
     def show_intro(self, env: PlatformerEnv, message: str = "COLLECT COINS FOR HEIDI", flashes: int = 4, on_ms: int = 450, off_ms: int = 250) -> None:
         cfg = env.config
@@ -62,9 +67,20 @@ class Renderer:
                 pygame.time.delay(off_ms)
 
     def _world_to_screen(self, x: float, y: float, height: float) -> Tuple[int, int]:
-        sx = int((x - self._camera_x) * self.scale_x)
-        sy = int((height - y) * self.scale_y)
+        sx = int(self._offset_x_px + (x - self._camera_x) * self.scale_x)
+        sy = int(self._offset_y_px + (height - y) * self.scale_y)
         return sx, sy
+
+    def _world_rect_to_screen(self, x: float, y: float, w: float, h: float, height: float) -> Any:
+        """Pixel-perfect mapping from world rect to screen rect using edge rounding.
+        x,y are world bottom-left; y axis points up. Returns a pygame.Rect.
+        """
+        s = self.scale_x
+        left = int(round(self._offset_x_px + (x - self._camera_x) * s))
+        right = int(round(self._offset_x_px + (x + w - self._camera_x) * s))
+        bottom = int(round(self._offset_y_px + (height - y) * s))
+        top = int(round(self._offset_y_px + (height - (y + h)) * s))
+        return pygame.Rect(left, top, max(0, right - left), max(0, bottom - top))
 
     def _px_scale(self) -> float:
         return float(min(self.scale_x, self.scale_y))
@@ -73,11 +89,23 @@ class Renderer:
         if not pygame.get_init():
             pygame.init()
         width_px, height_px = self._size
-        # derive scales from desired window size
-        self.scale_x = width_px / float(max(1e-6, cfg.width))
-        self.scale_y = height_px / float(max(1e-6, cfg.height))
+        # derive UNIFORM scale from width (zoomed view).
+        s = width_px / float(max(1e-6, cfg.width))
+        self.scale_x = s
+        self.scale_y = s
+        world_px_w = int(round(cfg.width * s))
+        self._offset_x_px = (width_px - world_px_w) // 2
+        # Align bottom row of ASCII map (if any) with y=0. Place floor exactly
+        # 1 tile above the bottom of the window when a map is present.
+        # Align bottom row to exact window bottom (no padding) when level_map is set
+        if getattr(cfg, 'level_map', None):
+            self._offset_y_px = int(round(height_px - (cfg.height) * s))
+        else:
+            # default 1m padding when no map is used
+            self._offset_y_px = int(round(height_px - (cfg.height + 1.0) * s))
         if self.screen is None:
-            self.screen = pygame.display.set_mode((width_px, height_px))
+            flags = pygame.FULLSCREEN if self._fullscreen else 0
+            self.screen = pygame.display.set_mode((width_px, height_px), flags)
             pygame.display.set_caption("Platformer")
             self.font = pygame.font.SysFont(None, 20)
             self.font_big = pygame.font.SysFont(None, 28)
@@ -122,6 +150,44 @@ class Renderer:
         scaled = pygame.transform.scale(base, (key[1], key[2]))
         self._sprite_scaled[key] = scaled
         return scaled
+
+    def _get_content_ratio(self, name: str) -> Tuple[float, float]:
+        """Return (height_ratio, width_ratio) of visible (alpha>0) bounds to total surface size."""
+        if name in self._content_ratio:
+            return self._content_ratio[name]
+        surf = self._sprite_base.get(name)
+        if surf is None:
+            raise KeyError(f"sprite not found: {name}")
+        mask = pygame.mask.from_surface(surf)
+        rects = mask.get_bounding_rects()
+        if rects:
+            # Union all rects
+            min_l = min(r.left for r in rects)
+            min_t = min(r.top for r in rects)
+            max_r = max(r.right for r in rects)
+            max_b = max(r.bottom for r in rects)
+            width = max(1, max_r - min_l)
+            height = max(1, max_b - min_t)
+        else:
+            width = surf.get_width()
+            height = surf.get_height()
+        h_ratio = height / float(max(1, surf.get_height()))
+        w_ratio = width / float(max(1, surf.get_width()))
+        # Clamp to sane range
+        h_ratio = float(max(0.05, min(1.0, h_ratio)))
+        w_ratio = float(max(0.05, min(1.0, w_ratio)))
+        self._content_ratio[name] = (h_ratio, w_ratio)
+        return self._content_ratio[name]
+
+    def _get_sprite_scaled_to_rect(self, name: str, world_w: float, world_h: float) -> Any:
+        """Scale sprite so its visible content bounds fit exactly in (world_w, world_h)."""
+        px_w = max(1, int(round(world_w * self.scale_x)))
+        px_h = max(1, int(round(world_h * self.scale_y)))
+        # Correct for transparent padding so the visible content matches exactly
+        h_ratio, w_ratio = self._get_content_ratio(name)
+        target_w = max(1, int(round(px_w / max(1e-6, w_ratio))))
+        target_h = max(1, int(round(px_h / max(1e-6, h_ratio))))
+        return self._get_sprite_scaled(name, target_w, target_h)
 
     def _get_sprite_scaled_by_world_h(self, name: str, world_h: float) -> Any:
         base = self._sprite_base.get(name)
@@ -169,16 +235,44 @@ class Renderer:
 
         obs = env.reset()
         done = False
-        steps_per_frame = max(1, int(round(float(speed))))
+        play_speed = float(speed)
+        steps_per_frame = max(1, int(round(play_speed)))
         while not done:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     done = True
                     break
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    # Toggle fullscreen
+                    self._fullscreen = not self._fullscreen
+                    flags = pygame.FULLSCREEN if self._fullscreen else 0
+                    width_px, height_px = self._size
+                    self.screen = pygame.display.set_mode((width_px, height_px), flags)
+                    # Recompute scaling offsets
+                    self._ensure_window(cfg)
+                # macOS: Command + F to toggle fullscreen (also works on others with GUI modifier)
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
+                    mods = event.mod if hasattr(event, 'mod') else 0
+                    KMOD_GUI = getattr(pygame, 'KMOD_GUI', 0)
+                    KMOD_META = getattr(pygame, 'KMOD_META', 0)
+                    if mods & (KMOD_GUI or KMOD_META):
+                        self._fullscreen = not self._fullscreen
+                        flags = pygame.FULLSCREEN if self._fullscreen else 0
+                        width_px, height_px = self._size
+                        self.screen = pygame.display.set_mode((width_px, height_px), flags)
+                        self._ensure_window(cfg)
                 # allow skipping to next generation with space when rendering a policy
                 if policy is not None and event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                     done = True
                     break
+                # Speed controls: '=' to increase, '-' to decrease
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_EQUALS, getattr(pygame, 'K_PLUS', pygame.K_EQUALS), getattr(pygame, 'K_KP_PLUS', pygame.K_EQUALS)):
+                        play_speed = min(64.0, play_speed * 1.5)
+                        steps_per_frame = max(1, int(round(play_speed)))
+                    elif event.key in (pygame.K_MINUS, getattr(pygame, 'K_KP_MINUS', pygame.K_MINUS)):
+                        play_speed = max(0.25, play_speed / 1.5)
+                        steps_per_frame = max(1, int(round(play_speed)))
 
             for _ in range(steps_per_frame):
                 if done:
@@ -211,7 +305,12 @@ class Renderer:
                 self._face_left = True
 
             # Camera follow with 20% margins
-            level_length = float(cfg.width * max(1, int(getattr(cfg, 'level_screens', 1))))
+            # Do not allow camera to scroll beyond the map. When an ASCII map
+            # defines the level, the level length equals cfg.width exactly.
+            if getattr(cfg, 'level_map', None):
+                level_length = float(cfg.width)
+            else:
+                level_length = float(cfg.width * max(1, int(getattr(cfg, 'level_screens', 1))))
             viewport_w = float(cfg.width)
             left_margin = self._camera_x + 0.2 * viewport_w
             right_margin = self._camera_x + 0.8 * viewport_w
@@ -223,50 +322,51 @@ class Renderer:
             # Clamp camera within level bounds
             max_cam = max(0.0, level_length - viewport_w)
             self._camera_x = float(max(0.0, min(self._camera_x, max_cam)))
+            # Snap camera to pixel grid to keep tile edges aligned
+            s = self.scale_x
+            if s > 0:
+                self._camera_x = round(self._camera_x * s) / s
 
             # Draw
             screen.fill((30, 30, 40))
-            # platforms
+            # platforms (use pixel-perfect rect mapping)
             for (px, py, pw, ph) in cfg.platforms:
-                rect = pygame.Rect(
-                    *self._world_to_screen(px, py + ph, cfg.height),
-                    int(pw * self.scale_x),
-                    int(ph * self.scale_y),
-                )
-                pygame.draw.rect(screen, (80, 120, 80), rect)
+                rect = self._world_rect_to_screen(px, py, pw, ph, cfg.height)
+                pygame.draw.rect(screen, (140, 140, 140), rect)
                 if show_hitboxes:
                     pygame.draw.rect(screen, (60, 200, 220), rect, 1)
 
             # coins (uncollected only) - draw sprite
             if hasattr(env, "coins"):
                 for coin in env.coins:
-                    if coin.get("collected"):
+                    if not getattr(coin, 'active', True):
                         continue
-                    # desired world size is diameter = 2*coin_radius; use vertical scaling to preserve proportion to platforms
-                    world_h = 2.0 * cfg.coin_radius
-                    spr = self._get_sprite_scaled_by_world_h('coin', world_h)
-                    # position centered at coin (x,y)
-                    cx, cy = self._world_to_screen(coin["x"], coin["y"], cfg.height)
+                    cw = float(getattr(coin, 'w', getattr(cfg, 'coin_w', 1.0)))
+                    ch = float(getattr(coin, 'h', getattr(cfg, 'coin_h', 1.0)))
+                    spr = self._get_sprite_scaled_to_rect('coin', cw, ch)
+                    cx, cy = self._world_to_screen(coin.x, coin.y, cfg.height)
                     rect = spr.get_rect()
                     rect.center = (cx, cy)
                     screen.blit(spr, rect)
                     if show_hitboxes:
-                        pygame.draw.circle(screen, (255, 255, 0), (cx, cy), int(cfg.coin_radius * self._px_scale()), 1)
+                        hr = pygame.Rect(cx - int((cw * self.scale_x) * 0.5), cy - int((ch * self.scale_y) * 0.5), int(cw * self.scale_x), int(ch * self.scale_y))
+                        pygame.draw.rect(screen, (255, 255, 0), hr, 1)
 
             # boots powerup sprite
-            if hasattr(env, "powerup") and env.powerup and not env.powerup.get("collected"):
-                world_h = 1.2 * cfg.powerup_radius
-                spr = self._get_sprite_scaled_by_world_h('boots', world_h)
-                cx, cy = self._world_to_screen(env.powerup["x"], env.powerup["y"], cfg.height)
+            if hasattr(env, "powerup") and env.powerup and getattr(env.powerup, 'active', False):
+                pw = float(getattr(env.powerup, 'w', getattr(cfg, 'powerup_w', 0.2)))
+                ph = float(getattr(env.powerup, 'h', getattr(cfg, 'powerup_h', 0.2)))
+                spr = self._get_sprite_scaled_to_rect('boots', pw, ph)
+                cx, cy = self._world_to_screen(env.powerup.x, env.powerup.y, cfg.height)
                 rect = spr.get_rect()
                 rect.center = (cx, cy)
                 screen.blit(spr, rect)
                 if show_hitboxes:
-                    pygame.draw.circle(screen, (0, 200, 255), (cx, cy), int(cfg.powerup_radius * self._px_scale()), 1)
+                    hr = pygame.Rect(cx - int((pw * self.scale_x) * 0.5), cy - int((ph * self.scale_y) * 0.5), int(pw * self.scale_x), int(ph * self.scale_y))
+                    pygame.draw.rect(screen, (0, 200, 255), hr, 1)
 
-            # player as 8-bit dinosaur sprite (approx 0.8 world units tall)
-            world_h = 1.0
-            dino = self._get_sprite_scaled_by_world_h('dino', world_h)
+            # player as 8-bit dinosaur sprite scaled to collider rect
+            dino = self._get_sprite_scaled_to_rect('dino', float(getattr(cfg, 'player_w', 0.8)), float(getattr(cfg, 'player_h', 0.8)))
             if self._face_left:
                 dino = pygame.transform.flip(dino, True, False)
             # anchor bottom-center at (x, y)
@@ -275,30 +375,39 @@ class Renderer:
             rect.midbottom = (bx, by)
             screen.blit(dino, rect)
 
-            # Overlay boots on dinosaur if powerup active
+            # Overlay boots on dinosaur if powerup active (smaller and at feet)
             if info.get('has_jump_powerup'):
-                boots = self._get_sprite_scaled_by_world_h('boots', world_h * 0.33)
+                boot_w = float(getattr(cfg, 'player_w', 0.8)) * 0.6
+                boot_h = float(getattr(cfg, 'player_h', 0.8)) * 0.38
+                boots = self._get_sprite_scaled_to_rect('boots', boot_w, boot_h)
                 if self._face_left:
                     boots = pygame.transform.flip(boots, True, False)
                 brect = boots.get_rect()
-                brect.midbottom = (bx, by - 1)
+                # Place boots centered at player feet, with a tiny lift so they don't clip ground
+                brect.midbottom = (bx, by - int(0.02 * self.scale_y))
                 screen.blit(boots, brect)
             if show_hitboxes:
-                pradius = 0.4
-                pcx, pcy = self._world_to_screen(env.x, env.y + pradius, cfg.height)
-                pygame.draw.circle(screen, (255, 60, 60), (pcx, pcy), int(pradius * self._px_scale()), 1)
+                pw = float(getattr(cfg, 'player_w', 0.8))
+                ph = float(getattr(cfg, 'player_h', 0.8))
+                pcx, pcy = self._world_to_screen(env.x, env.y + 0.5*ph, cfg.height)
+                hr = pygame.Rect(pcx - int((pw * self.scale_x) * 0.5), pcy - int((ph * self.scale_y) * 0.5), int(pw * self.scale_x), int(ph * self.scale_y))
+                pygame.draw.rect(screen, (255, 60, 60), hr, 1)
 
             # raccoon goal
-            rx, ry = getattr(env, 'raccoon', {"x": cfg.x_goal, "y": 0.6}).values()
-            rac_world_h = 1.0
-            rac = self._get_sprite_scaled_by_world_h('raccoon', rac_world_h)
+            rac = getattr(env, 'raccoon', None)
+            rx = rac.x if rac is not None else cfg.x_goal
+            ry = rac.y if rac is not None else 0.6
+            rw = float(getattr(rac, 'w', getattr(cfg, 'raccoon_w', 1.0))) if rac is not None else float(getattr(cfg, 'raccoon_w', 1.0))
+            rh = float(getattr(rac, 'h', getattr(cfg, 'raccoon_h', 1.0))) if rac is not None else float(getattr(cfg, 'raccoon_h', 1.0))
+            rac_img = self._get_sprite_scaled_to_rect('raccoon', rw, rh)
             rcx, rcy = self._world_to_screen(rx, ry, cfg.height)
-            rrect = rac.get_rect()
+            rrect = rac_img.get_rect()
             # Center the raccoon sprite on (rx, ry) to match collision center in env
             rrect.center = (rcx, rcy)
-            screen.blit(rac, rrect)
+            screen.blit(rac_img, rrect)
             if show_hitboxes:
-                pygame.draw.circle(screen, (255, 255, 255), (rcx, rcy), int(cfg.raccoon_radius * self._px_scale()), 1)
+                hr = pygame.Rect(rcx - int((rw * self.scale_x) * 0.5), rcy - int((rh * self.scale_y) * 0.5), int(rw * self.scale_x), int(rh * self.scale_y))
+                pygame.draw.rect(screen, (255, 255, 255), hr, 1)
 
             # HUD: coins, time (seconds), powerup
             coins_text = f"Coins: {info.get('coins_collected', 0)}/{info.get('coins_total', 0)}"
@@ -341,9 +450,9 @@ class Renderer:
             self.clock.tick(fps)
 
 
-def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False, show_intro: bool = False) -> None:
+def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False, show_intro: bool = False, fullscreen: bool = False) -> None:
     env = PlatformerEnv(GameConfig())
-    renderer = Renderer()
+    renderer = Renderer(fullscreen=fullscreen)
 
     if not weights_paths:
         if show_intro:
