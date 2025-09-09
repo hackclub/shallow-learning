@@ -112,12 +112,48 @@ def train_ga(env: PlatformerEnv, policy_cfg: MLPPolicyConfig, ga_cfg: GAConfig) 
 
         # Save checkpoint on any improvement
         if improved and ga_cfg.checkpoint_dir is not None:
+            # Compute best single-episode return among the evaluation episodes (deterministic ep seeds when GA seed set)
+            episodes = max(1, int(ga_cfg.episodes_per_eval))
+            best_single = -np.inf
+            best_epseed: Optional[int] = None
+            for ep_idx in range(episodes):
+                ep_seed = int(ga_cfg.seed + ep_idx) if ga_cfg.seed is not None else None
+                tmp_env = PlatformerEnv(env.config, seed=ep_seed)
+                tmp_policy = MLPPolicy(policy_cfg)
+                tmp_policy.set_flat(best_weights)
+                single = float(evaluate_policy(tmp_policy, tmp_env, episodes=1))
+                if single > best_single:
+                    best_single = single
+                    best_epseed = ep_seed
+
             os.makedirs(ga_cfg.checkpoint_dir, exist_ok=True)
+            seed_tag = ga_cfg.seed if ga_cfg.seed is not None else 'none'
+            epseed_tag = best_epseed if best_epseed is not None else 'none'
             ckpt_path = os.path.join(
-                ga_cfg.checkpoint_dir, f"best_gen{gen + 1}_fit{best_fitness:.3f}.npy"
+                ga_cfg.checkpoint_dir,
+                f"best_gen{gen + 1}_seed{seed_tag}_fit{best_fitness:.3f}_max{best_single:.3f}_epseed{epseed_tag}.npy",
             )
             np.save(ckpt_path, best_weights)
-            logger.info("Saved improved checkpoint: %s", ckpt_path)
+            logger.info(
+                "Saved improved checkpoint: %s (best single=%.3f)",
+                ckpt_path,
+                best_single,
+            )
+            # Write deterministic metadata as JSON sidecar for exact replay
+            try:
+                import json
+                meta = {
+                    "gen": int(gen + 1),
+                    "seed": (int(ga_cfg.seed) if ga_cfg.seed is not None else None),
+                    "episodes_per_eval": int(episodes),
+                    "fit": float(best_fitness),
+                    "best_single": float(best_single),
+                    "epseed": (int(best_epseed) if best_epseed is not None else None),
+                }
+                with open(ckpt_path + ".json", "w") as f:
+                    json.dump(meta, f, separators=(",", ":"))
+            except Exception as e:
+                logger.warning("Failed to write checkpoint metadata JSON: %s", e)
 
         # Selection
         elite_count = max(1, int(ga_cfg.elite_fraction * ga_cfg.population_size))

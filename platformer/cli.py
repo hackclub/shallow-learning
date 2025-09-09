@@ -41,12 +41,17 @@ def cmd_train(args: argparse.Namespace) -> int:
             os.makedirs(args.ckpt_dir, exist_ok=True)
             removed = 0
             for f in os.listdir(args.ckpt_dir):
+                if not (f.endswith('.npy') or f.endswith('.json')):
+                    continue
                 p = os.path.join(args.ckpt_dir, f)
-                if os.path.isfile(p) and f.endswith(".npy"):
-                    os.remove(p)
-                    removed += 1
+                if os.path.isfile(p) or os.path.islink(p):
+                    try:
+                        os.remove(p)
+                        removed += 1
+                    except Exception as ex:
+                        logging.warning("Failed to remove %s: %s", p, ex)
             if removed:
-                logging.info("Removed %d existing checkpoint(s) in %s", removed, args.ckpt_dir)
+                logging.info("Removed %d checkpoint file(s) in %s", removed, args.ckpt_dir)
         except Exception as e:
             logging.warning("Failed to clean checkpoint dir %s: %s", args.ckpt_dir, e)
 
@@ -89,17 +94,56 @@ def cmd_train(args: argparse.Namespace) -> int:
 
 def cmd_render(args: argparse.Namespace) -> int:
     from .renderer import render as do_render
+    import re
+    import time
     weights = list(args.weights or [])
     if args.ckpt_dir:
         try:
-            files = sorted(
-                [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith(".npy")]
-            )
-            weights = files
+            files_all = [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith(".npy")]
+            # Prefer GA checkpoints that include a generation tag; keep others at the end
+            import re
+            files_gen = [p for p in files_all if re.search(r"gen\d+", os.path.basename(p))]
+            files_other = [p for p in files_all if p not in files_gen]
+            files = sorted(files_gen) + sorted(files_other)
+            # Optional selection by generation tag
+            if getattr(args, 'gen', None) is not None:
+                want_gen = int(args.gen)
+                def gen_val(p: str) -> int:
+                    m = re.search(r"gen(\d+)", os.path.basename(p))
+                    return int(m.group(1)) if m else -1
+                files = [p for p in files if gen_val(p) == want_gen]
+            if bool(getattr(args, 'best_only', False)) and files:
+                # Pick the file with the highest parsed fit value; fallback to last if unparsable
+                def fit_val(p: str) -> float:
+                    m = re.search(r"fit([0-9]+(?:\.[0-9]+)?)", os.path.basename(p))
+                    return float(m.group(1)) if m else float('-inf')
+                best = max(files, key=fit_val)
+                if fit_val(best) == float('-inf'):
+                    weights = [files[-1]]
+                else:
+                    weights = [best]
+            else:
+                weights = files
         except Exception as e:
             logging.error("Failed to list checkpoints in %s: %s", args.ckpt_dir, e)
             return 1
-    do_render(weights, speed=float(args.speed), show_hitboxes=bool(args.hitboxes), fullscreen=bool(args.fullscreen), log_rays=bool(args.log_rays))
+    # Optional watch mode: repeatedly play the latest checkpoint when directory updates
+    if getattr(args, 'watch', False) and args.ckpt_dir:
+        last_seen = set()
+        while True:
+            files_all = [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith('.npy')]
+            files_all.sort()
+            current = set(files_all)
+            if current - last_seen:
+                time.sleep(1.0)  # debounce filesystem writes
+                files_all = [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith('.npy')]
+                if files_all:
+                    latest = sorted(files_all)[-1]
+                    do_render([latest], speed=float(args.speed), show_hitboxes=bool(args.hitboxes), fullscreen=bool(args.fullscreen), log_rays=bool(args.log_rays), seed=args.seed, oneshot=True, contrail=bool(args.contrail), contrail_alpha=float(args.contrail_alpha))
+                last_seen = set(files_all)
+            time.sleep(0.5)
+    else:
+        do_render(weights, speed=float(args.speed), show_hitboxes=bool(args.hitboxes), fullscreen=bool(args.fullscreen), log_rays=bool(args.log_rays), seed=args.seed, contrail=bool(args.contrail), contrail_alpha=float(args.contrail_alpha))
     return 0
 
 
@@ -138,6 +182,12 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--ckpt-dir", type=str, default=None, help="Directory containing .npy checkpoints")
     pr.add_argument("--weights", type=str, nargs='*', help="Explicit .npy weight files (overridden by --ckpt-dir)", default=[])
     pr.add_argument("--speed", type=float, default=1.0, help="Speed multiplier (steps per frame)")
+    pr.add_argument("--seed", type=int, default=None, help="Force a specific env seed for all files")
+    pr.add_argument("--gen", type=int, default=None, help="When used with --ckpt-dir, render only checkpoints with this generation number")
+    pr.add_argument("--best-only", action='store_true', help="When used with --ckpt-dir, render only the highest-fit checkpoint")
+    pr.add_argument("--watch", action='store_true', help="Watch ckpt dir and auto-play the latest checkpoint when new files appear")
+    pr.add_argument("--contrail", action='store_true', help="Do not clear screen each frame; draw character at low alpha to leave a trail")
+    pr.add_argument("--contrail-alpha", type=float, default=0.01, help="Alpha (0..1) for contrail ghost (default 0.01)")
     pr.add_argument("--hitboxes", action='store_true', help="Overlay collision hitboxes")
     pr.add_argument("--fullscreen", action='store_true', help="Open the window in fullscreen (toggle with F11)")
     pr.add_argument("--log-rays", action='store_true', help="Print raycast hits/distances during playback")
