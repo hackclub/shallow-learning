@@ -14,6 +14,8 @@ exec "$PY" -m platformer render \
   --ckpt-dir "$CKPT_DIR" \
   --speed 3 \
   --watch \
+  --log-rays \
   "$@"
+
 
 

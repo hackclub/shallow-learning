@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shallow Learning - BYO neural net</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <style>
+      .nav-menu .nav-link { width: 120px; height: 40px; }
+      .nav-center { padding-left: 176px; padding-right: 120px; }
+      .nav-menu { flex-wrap: nowrap; }
+      @media (max-width: 768px) {
+        .nav-center { padding-left: 132px; padding-right: 112px; }
+        .nav-menu { gap: 6px !important; }
+        .nav-menu .nav-link { width: 84px; height: 36px; font-size: 12px; }
+        #logo-img { width: 56px; height: 56px; right: 6px !important; top: 10px !important; }
+        #hc-flag { width: 96px !important; left: 8px !important; }
+      }
+      /* Hide flag when space is tight; reclaim left padding */
+      @media (max-width: 480px) {
+        #hc-flag { display: none !important; }
+        .nav-center { padding-left: 36px; padding-right: 104px; }
+        .nav-menu { gap: 6px !important; }
+        .nav-menu .nav-link { width: 78px; height: 34px; font-size: 12px; }
+      }
+      @media (max-width: 360px) {
+        .nav-center { padding-left: 28px; padding-right: 96px; }
+        .nav-menu { gap: 4px !important; }
+        .nav-menu .nav-link { width: 66px; height: 32px; font-size: 10px; }
+      }
+    </style>
+  </head>
+  <body>
+    <a href="https://hackclub.com/"><img id="hc-flag" style="position: absolute; top: 0; left: 24px; border: 0; width: 128px; z-index: 999;" src="https://assets.hackclub.com/flag-orpheus-top.svg" alt="Hack Club"/></a>    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+  </html>
+
+

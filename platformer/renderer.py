@@ -40,6 +40,32 @@ class Renderer:
         self._camera_x = 0.0
         # content ratio cache (visible alpha bounds / surface size)
         self._content_ratio: Dict[str, Tuple[float, float]] = {}
+        # navigation edge-trigger (accept LEFT/RIGHT only on key-up -> key-down transition)
+        self._nav_ready = True
+
+    def _debounce_navigation(self, max_ms: int = 200) -> None:
+        """Briefly wait for LEFT/RIGHT keys to be released to avoid rapid re-triggers.
+        Limits to max_ms to avoid long stalls.
+        """
+        if pygame is None:
+            return
+        try:
+            print("[nav] debounce: waiting for key release")
+        except Exception:
+            pass
+        start = pygame.time.get_ticks()
+        while True:
+            # Pump events so KEYUP is registered
+            for _ in pygame.event.get():
+                pass
+            pressed = pygame.key.get_pressed()
+            left_down = pressed[pygame.K_LEFT] if len(pressed) > pygame.K_LEFT else False
+            right_down = pressed[pygame.K_RIGHT] if len(pressed) > pygame.K_RIGHT else False
+            if not left_down and not right_down:
+                break
+            if pygame.time.get_ticks() - start >= max_ms:
+                break
+            self.clock.tick(120)
 
     def wait_for_space(self) -> None:
         """Hold the final frame until SPACE (or window close)."""
@@ -86,8 +112,6 @@ class Renderer:
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit(0)
-                if event.type == pygame.KEYDOWN and event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                    return True
                 if event.type == pygame.KEYDOWN:
                     mods = event.mod if hasattr(event, 'mod') else 0
                     KMOD_GUI = getattr(pygame, 'KMOD_GUI', 0)
@@ -107,6 +131,50 @@ class Renderer:
             self.clock.tick(30)
             remaining -= (1.0 / 30.0)
         return False
+
+    def hold_or_navigate(self, seconds: float = 3.0) -> Optional[str]:
+        """Hold final frame and listen for Left/Right navigation.
+        Returns 'next' for Right arrow, 'prev' for Left arrow, or None if time elapsed.
+        """
+        if pygame is None:
+            return None
+        # Reset edge-trigger so the very next keydown is accepted during this hold.
+        # Without this, if a previous frame left _nav_ready False, arrows would be ignored.
+        self._nav_ready = True
+        remaining = float(max(0.0, seconds))
+        while remaining > 0.0:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit(0)
+                if event.type == pygame.KEYDOWN:
+                    # Immediate quit shortcuts
+                    mods = event.mod if hasattr(event, 'mod') else 0
+                    KMOD_GUI = getattr(pygame, 'KMOD_GUI', 0)
+                    KMOD_META = getattr(pygame, 'KMOD_META', 0)
+                    if event.key in (pygame.K_q, pygame.K_w) and (mods & (KMOD_GUI | KMOD_META)):
+                        pygame.quit()
+                        sys.exit(0)
+                    if event.key == pygame.K_q:
+                        pygame.quit()
+                        sys.exit(0)
+                if event.type == pygame.KEYUP and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                    self._nav_ready = True
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHT and self._nav_ready:
+                    self._nav_ready = False
+                    return 'prev'
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_LEFT and self._nav_ready:
+                    self._nav_ready = False
+                    return 'next'
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    self._fullscreen = not self._fullscreen
+                    flags = pygame.FULLSCREEN if self._fullscreen else 0
+                    width_px, height_px = self._size
+                    self.screen = pygame.display.set_mode((width_px, height_px), flags)
+            pygame.display.flip()
+            self.clock.tick(30)
+            remaining -= (1.0 / 30.0)
+        return None
 
     def show_intro(self, env: PlatformerEnv, message: str = "COLLECT COINS FOR HEIDI", flashes: int = 4, on_ms: int = 450, off_ms: int = 250) -> None:
         cfg = env.config
@@ -195,6 +263,7 @@ class Renderer:
         coin_path = os.path.join(assets_dir, 'coin.png')
         boots_path = os.path.join(assets_dir, 'boots.png')
         rac_path = os.path.join(assets_dir, 'raccoon.png')
+        heart_path = os.path.join(assets_dir, 'heart.png')
         brick_path = os.path.join(assets_dir, 'brick.png')
         missing: List[str] = []
         if not os.path.exists(dino_path):
@@ -219,6 +288,13 @@ class Renderer:
         self._sprite_base['coin'] = pygame.image.load(pick(coin_path)).convert_alpha()
         self._sprite_base['boots'] = pygame.image.load(pick(boots_path)).convert_alpha()
         self._sprite_base['raccoon'] = pygame.image.load(pick(rac_path)).convert_alpha()
+        # Optional heart sprite for celebration. If missing, we will draw a vector heart.
+        try:
+            heart_file = pick(heart_path)
+            if os.path.exists(heart_file):
+                self._sprite_base['heart'] = pygame.image.load(heart_file).convert_alpha()
+        except Exception:
+            pass
         # Optional brick texture for platforms
         try:
             brick_file = pick(brick_path)
@@ -320,7 +396,7 @@ class Renderer:
                 seed = None
         return gen, fit, seed
 
-    def render_episode(self, env: PlatformerEnv, policy: Optional[MLPPolicy] = None, fps: int = 30, speed: float = 1.0, label: Optional[str] = None, progress: Optional[tuple[int, int]] = None, show_hitboxes: bool = False, log_rays: bool = False, contrail: bool = False, contrail_alpha: float = 0.01) -> None:
+    def render_episode(self, env: PlatformerEnv, policy: Optional[MLPPolicy] = None, fps: int = 30, speed: float = 1.0, label: Optional[str] = None, progress: Optional[tuple[int, int]] = None, show_hitboxes: bool = False, log_rays: bool = False, contrail: bool = False, contrail_alpha: float = 0.01, contrail_mod: int = 1, reload_event: Optional[object] = None) -> Optional[str]:
         cfg = env.config
         self._ensure_window(cfg)
         screen = self.screen
@@ -336,10 +412,15 @@ class Renderer:
         post_end_time_left_s = 0.0  # ensure a final HUD refresh on failure/time-up
         episode_return = 0.0
         first_frame = True
+        paused = False  # SPACE toggles pause/resume (only when policy is not None)
 
         # Special snapshot mode for contrail: draw static world once, then step as fast as possible
         # without flipping until the very end. Camera is held fixed to avoid smearing.
         if contrail:
+            try:
+                print(f"[contrail] enabled alpha={contrail_alpha} mod={contrail_mod}")
+            except Exception:
+                pass
             # Freeze camera for the whole snapshot so trail aligns with platforms
             original_camera_x = self._camera_x
             self._camera_x = 0.0
@@ -389,12 +470,41 @@ class Renderer:
 
             # Tight loop: step env as fast as possible, drawing only the ghost each step
             episode_return = 0.0
+            frame_i = 0
             while not done:
-                # Minimal event pump to allow window close
+                # If an external reload was requested (watch mode), return immediately
+                try:
+                    if reload_event is not None and callable(getattr(reload_event, 'is_set', None)) and reload_event.is_set():
+                        print("[watch] reload requested during snapshot -> exiting episode early")
+                        return None
+                except Exception:
+                    pass
+                # Minimal event pump to allow window close or user skip
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         pygame.quit()
                         sys.exit(0)
+                    if event.type == pygame.KEYDOWN:
+                        # Immediate quit shortcuts
+                        mods = event.mod if hasattr(event, 'mod') else 0
+                        KMOD_GUI = getattr(pygame, 'KMOD_GUI', 0)
+                        KMOD_META = getattr(pygame, 'KMOD_META', 0)
+                        if event.key in (pygame.K_q, pygame.K_w) and (mods & (KMOD_GUI | KMOD_META)):
+                            pygame.quit()
+                            sys.exit(0)
+                        if event.key == pygame.K_q:
+                            pygame.quit()
+                            sys.exit(0)
+                    if event.type == pygame.KEYUP and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                        self._nav_ready = True
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHT and self._nav_ready:
+                        self._nav_ready = False
+                        print("[nav] RIGHT detected during snapshot -> prev (edge)")
+                        return 'prev'
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_LEFT and self._nav_ready:
+                        self._nav_ready = False
+                        print("[nav] LEFT detected during snapshot -> next (edge)")
+                        return 'next'
                 # Compute action
                 if policy is None:
                     # In snapshot mode without a policy, do nothing (idle)
@@ -413,35 +523,103 @@ class Renderer:
                 elif env.vx > 0.05:
                     self._face_left = True
 
-                # Draw ghost at current position (no clears, no flips)
-                dino = self._get_sprite_scaled_to_rect('dino', float(getattr(cfg, 'player_w', 0.8)), float(getattr(cfg, 'player_h', 0.8)))
-                if self._face_left:
-                    dino = pygame.transform.flip(dino, True, False)
-                bx, by = self._world_to_screen(env.x, env.y, cfg.height)
-                rect = dino.get_rect()
-                rect.midbottom = (bx, by)
-                ghost = dino.copy()
-                ghost.set_alpha(max(1, int(255 * max(0.0, min(1.0, contrail_alpha)))))
-                screen.blit(ghost, rect)
-                # Optional boots overlay ghost when active
-                if info.get('has_jump_powerup'):
-                    boot_w = float(getattr(cfg, 'player_w', 0.8)) * 0.6
-                    boot_h = float(getattr(cfg, 'player_h', 0.8)) * 0.38
-                    boots = self._get_sprite_scaled_to_rect('boots', boot_w, boot_h)
+                # Draw ghost at current position every contrail_mod frames (no clears, no flips)
+                if max(1, int(contrail_mod)) <= 1 or (frame_i % max(1, int(contrail_mod)) == 0):
+                    dino = self._get_sprite_scaled_to_rect('dino', float(getattr(cfg, 'player_w', 0.8)), float(getattr(cfg, 'player_h', 0.8)))
                     if self._face_left:
-                        boots = pygame.transform.flip(boots, True, False)
-                    brect = boots.get_rect()
-                    brect.midbottom = (bx, by - int(0.02 * self.scale_y))
-                    ghost_b = boots.copy()
-                    ghost_b.set_alpha(max(1, int(255 * max(0.0, min(1.0, contrail_alpha)))))
-                    screen.blit(ghost_b, brect)
+                        dino = pygame.transform.flip(dino, True, False)
+                    bx, by = self._world_to_screen(env.x, env.y, cfg.height)
+                    rect = dino.get_rect()
+                    rect.midbottom = (bx, by)
+                    ghost = dino.copy()
+                    ghost.set_alpha(max(1, int(255 * max(0.0, min(1.0, contrail_alpha)))))
+                    screen.blit(ghost, rect)
+                    # Optional boots overlay ghost when active
+                    if info.get('has_jump_powerup'):
+                        boot_w = float(getattr(cfg, 'player_w', 0.8)) * 0.6
+                        boot_h = float(getattr(cfg, 'player_h', 0.8)) * 0.38
+                        boots = self._get_sprite_scaled_to_rect('boots', boot_w, boot_h)
+                        if self._face_left:
+                            boots = pygame.transform.flip(boots, True, False)
+                        brect = boots.get_rect()
+                        brect.midbottom = (bx, by - int(0.02 * self.scale_y))
+                        ghost_b = boots.copy()
+                        ghost_b.set_alpha(max(1, int(255 * max(0.0, min(1.0, contrail_alpha)))))
+                        screen.blit(ghost_b, brect)
+                frame_i += 1
 
+                # Yield a tiny bit to avoid pegging the CPU
+                self.clock.tick(240)
+
+            # Draw final HUD/metadata once before presenting
+            try:
+                # HUD (coins/time/fitness)
+                coins_text = f"Coins: {info.get('coins_collected', 0)}/{info.get('coins_total', 0)}"
+                time_left_s = max(0.0, float(info.get('time_remaining', 0)) * float(cfg.dt))
+                time_text = f"Time: {time_left_s:.1f}s"
+                pwr_text = "Power: x2 jump" if info.get('has_jump_powerup') else "Power: none"
+                fit_text = f"Fitness: {episode_return:.3f}"
+                hud_text = f"{coins_text}  {time_text}  {fit_text}  {pwr_text}"
+                text_surface = self.font.render(hud_text, True, (230, 230, 230))
+                screen.blit(text_surface, (10, 10))
+                # Progress top-right (if provided)
+                if progress is not None:
+                    i, n = progress
+                    gen_val = None
+                    try:
+                        import json
+                        with open(label + ".json", "r") as f:  # type: ignore[arg-type]
+                            meta = json.load(f)
+                            gen_val = meta.get("gen")
+                    except Exception:
+                        base = os.path.basename(label) if label else ""  # type: ignore[arg-type]
+                        m = re.search(r"gen(\d+)", base)
+                        gen_val = int(m.group(1)) if m else None
+                    rank_desc = max(1, int(n) - int(i) + 1)
+                    txt = f"Gen {gen_val} ({rank_desc}/{n})" if gen_val is not None else f"{rank_desc}/{n}"
+                    prog_surface = self.font_big.render(txt, True, (255, 255, 255))
+                    pr = prog_surface.get_rect()
+                    pr.top = 6
+                    pr.right = self._size[0] - 10
+                    screen.blit(prog_surface, pr)
+                # Label + parsed meta (Gen/Seed/EpisodeSeed) — disabled (already shown elsewhere)
+                if False and label:
+                    base = os.path.basename(label)
+                    gen, _fit, seed = self._parse_ckpt_meta(base)
+                    epseed = None
+                    try:
+                        import json
+                        with open(label + ".json", "r") as f:
+                            meta = json.load(f)
+                            if gen is None:
+                                gen = meta.get("gen")
+                            if seed is None:
+                                seed = meta.get("seed")
+                            epseed = meta.get("epseed")
+                    except Exception:
+                        m_ep = re.search(r"epseed(\d+)", base)
+                        epseed = int(m_ep.group(1)) if m_ep else None
+                    if gen is not None or seed is not None or epseed is not None:
+                        parts = []
+                        if gen is not None:
+                            parts.append(f"Gen {gen}")
+                        if seed is not None:
+                            parts.append(f"Seed {seed}")
+                        if epseed is not None and epseed != seed:
+                            parts.append(f"EpisodeSeed {epseed}")
+                        meta_surface = self.font_big.render("  ".join(parts), True, (255, 255, 0))
+                        screen.blit(meta_surface, (10, 30))
+                        label_surface = self.font.render(base, True, (200, 200, 255))
+                        screen.blit(label_surface, (10, 30 + meta_surface.get_height() + 2))
+            except Exception:
+                pass
             # Present final composite once, then restore camera
             pygame.display.flip()
             self._camera_x = original_camera_x
-            return
+            return None
         while not done:
             skip_next = False
+            nav: Optional[str] = None
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
@@ -476,13 +654,34 @@ class Renderer:
                     if event.key == pygame.K_q:
                         pygame.quit()
                         sys.exit(0)
-                # SPACE should always advance to next generation (skip current playback)
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                    skip_next = True
-                    done = True
-                    celebrate_time_left_s = 0.0
-                    post_end_time_left_s = 0.0
-                    break
+                # Left/Right navigate generations ONLY during policy-driven playback
+                # In manual play (policy is None), arrow keys must control the character.
+                if policy is not None:
+                    if event.type == pygame.KEYUP and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                        self._nav_ready = True
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHT and self._nav_ready:
+                        self._nav_ready = False
+                        print("[nav] RIGHT detected during playback -> request prev (edge)")
+                        nav = 'prev'
+                        skip_next = True
+                        done = True
+                        celebrate_time_left_s = 0.0
+                        post_end_time_left_s = 0.0
+                        break
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_LEFT and self._nav_ready:
+                        self._nav_ready = False
+                        print("[nav] LEFT detected during playback -> request next (edge)")
+                        nav = 'next'
+                        skip_next = True
+                        done = True
+                        celebrate_time_left_s = 0.0
+                        post_end_time_left_s = 0.0
+                        break
+                # SPACE toggles pause/resume for policy-driven playback
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and policy is not None:
+                    paused = not paused
+                    # When pausing, ensure celebration timers do not count down via stepping
+                    continue
                 # Speed controls: '=' to increase, '-' to decrease
                 if event.type == pygame.KEYDOWN:
                     if event.key in (pygame.K_EQUALS, getattr(pygame, 'K_PLUS', pygame.K_EQUALS), getattr(pygame, 'K_KP_PLUS', pygame.K_EQUALS)):
@@ -493,12 +692,16 @@ class Renderer:
                         steps_per_frame = max(1, int(round(play_speed)))
 
             if skip_next:
-                # Return early to allow outer loop to advance to next checkpoint
-                return
+                # Return early to allow outer loop to navigate
+                try:
+                    print(f"[nav] render_episode returning navigation='{nav}'")
+                except Exception:
+                    pass
+                return nav
 
             for _ in range(steps_per_frame):
                 # Freeze physics during celebration or post-end HUD hold
-                if celebrate_time_left_s > 0.0 or post_end_time_left_s > 0.0:
+                if paused or celebrate_time_left_s > 0.0 or post_end_time_left_s > 0.0:
                     break  # freeze physics during celebration
                 if done:
                     break
@@ -640,20 +843,62 @@ class Renderer:
                     hr = pygame.Rect(cx - int((pw * self.scale_x) * 0.5), cy - int((ph * self.scale_y) * 0.5), int(pw * self.scale_x), int(ph * self.scale_y))
                     pygame.draw.rect(screen, (0, 200, 255), hr, 1)
 
-            # player as 8-bit dinosaur sprite scaled to collider rect
-            dino = self._get_sprite_scaled_to_rect('dino', float(getattr(cfg, 'player_w', 0.8)), float(getattr(cfg, 'player_h', 0.8)))
-            if self._face_left:
-                dino = pygame.transform.flip(dino, True, False)
-            # anchor bottom-center at (x, y)
-            bx, by = self._world_to_screen(env.x, env.y, cfg.height)
-            rect = dino.get_rect()
-            rect.midbottom = (bx, by)
-            if contrail:
-                ghost = dino.copy()
-                ghost.set_alpha(max(1, int(255 * max(0.0, min(1.0, contrail_alpha)))))
-                screen.blit(ghost, rect)
-            else:
-                screen.blit(dino, rect)
+            # When celebrating a success, show raccoon and dino standing together, centered
+            # at the raccoon's original center. Dino stands to the LEFT, facing the raccoon.
+            pair_drawn = False
+            celebrating_success = (celebrate_time_left_s > 0.0) or ((info.get('succeed') if 'info' in locals() else False) and done)
+            if celebrating_success:
+                try:
+                    rac = getattr(env, 'raccoon', None)
+                    rx = rac.x if rac is not None else cfg.x_goal
+                    ry = rac.y if rac is not None else 0.6
+                    rw = float(getattr(rac, 'w', getattr(cfg, 'raccoon_w', 1.0))) if rac is not None else float(getattr(cfg, 'raccoon_w', 1.0))
+                    rh = float(getattr(rac, 'h', getattr(cfg, 'raccoon_h', 1.0))) if rac is not None else float(getattr(cfg, 'raccoon_h', 1.0))
+                    rac_img2 = self._get_sprite_scaled_to_rect('raccoon', rw, rh)
+                    rcx2, rcy2 = self._world_to_screen(rx, ry, cfg.height)
+                    rrect2 = rac_img2.get_rect()
+                    # Player sprite (force facing RIGHT toward raccoon on the right)
+                    dino2 = self._get_sprite_scaled_to_rect('dino', float(getattr(cfg, 'player_w', 0.8)), float(getattr(cfg, 'player_h', 0.8)))
+                    dino2 = pygame.transform.flip(dino2, True, False)
+                    drect2 = dino2.get_rect()
+                    gap_px = 6
+                    total_w = drect2.width + gap_px + rrect2.width
+                    left_x = rcx2 - total_w // 2
+                    base_bottom = rcy2 + rrect2.height // 2
+                    # Position dino to the left, raccoon to the right
+                    drect2.midbottom = (left_x + drect2.width // 2, base_bottom)
+                    rrect2.midbottom = (left_x + drect2.width + gap_px + rrect2.width // 2, base_bottom)
+                    screen.blit(dino2, drect2)
+                    screen.blit(rac_img2, rrect2)
+                    # Overlay boots on dino if powerup is active; align to dino's feet
+                    if info.get('has_jump_powerup'):
+                        boot_w = float(getattr(cfg, 'player_w', 0.8)) * 0.6
+                        boot_h = float(getattr(cfg, 'player_h', 0.8)) * 0.38
+                        boots2 = self._get_sprite_scaled_to_rect('boots', boot_w, boot_h)
+                        # dino2 is flipped to face right; boots should match that orientation
+                        boots2 = pygame.transform.flip(boots2, True, False)
+                        brect2 = boots2.get_rect()
+                        brect2.midbottom = (drect2.midbottom[0], drect2.midbottom[1] - int(0.02 * self.scale_y))
+                        screen.blit(boots2, brect2)
+                    pair_drawn = True
+                except Exception:
+                    pair_drawn = False
+
+            if not pair_drawn:
+                # player as 8-bit dinosaur sprite scaled to collider rect
+                dino = self._get_sprite_scaled_to_rect('dino', float(getattr(cfg, 'player_w', 0.8)), float(getattr(cfg, 'player_h', 0.8)))
+                if self._face_left:
+                    dino = pygame.transform.flip(dino, True, False)
+                # anchor bottom-center at (x, y)
+                bx, by = self._world_to_screen(env.x, env.y, cfg.height)
+                rect = dino.get_rect()
+                rect.midbottom = (bx, by)
+                if contrail:
+                    ghost = dino.copy()
+                    ghost.set_alpha(max(1, int(255 * max(0.0, min(1.0, contrail_alpha)))))
+                    screen.blit(ghost, rect)
+                else:
+                    screen.blit(dino, rect)
 
             # Overlay boots on dinosaur if powerup active (smaller and at feet)
             if info.get('has_jump_powerup'):
@@ -679,7 +924,7 @@ class Renderer:
                 pygame.draw.rect(screen, (255, 60, 60), hr, 1)
 
             # raccoon goal
-            if (not contrail) or first_frame:
+            if ((not contrail) or first_frame) and not pair_drawn:
                 rac = getattr(env, 'raccoon', None)
                 rx = rac.x if rac is not None else cfg.x_goal
                 ry = rac.y if rac is not None else 0.6
@@ -699,17 +944,23 @@ class Renderer:
             if celebrate_time_left_s > 0.0 or (info.get('succeed') if 'info' in locals() else False):
                 heart_offset = rh * 0.9
                 hx, hy = self._world_to_screen(rx, ry + heart_offset, cfg.height)
-                # Size heart relative to raccoon height in pixels
-                size_px = int(max(16, rh * self._px_scale() * 0.8))
-                # Draw a big red heart
-                col = (255, 0, 64)
-                pygame.draw.circle(screen, col, (hx - size_px // 3, hy), size_px // 3)
-                pygame.draw.circle(screen, col, (hx + size_px // 3, hy), size_px // 3)
-                points = [(hx - size_px // 1.5, hy), (hx + size_px // 1.5, hy), (hx, hy + size_px)]
-                pygame.draw.polygon(screen, col, points)
-                # Optional subtle outline for visibility
-                pygame.draw.circle(screen, (255, 255, 255), (hx - size_px // 3, hy), size_px // 3, 1)
-                pygame.draw.circle(screen, (255, 255, 255), (hx + size_px // 3, hy), size_px // 3, 1)
+                # If a heart sprite is available, render it; otherwise draw vector heart
+                heart_surface = self._sprite_base.get('heart')
+                if heart_surface is not None:
+                    # Scale by raccoon height for a pleasing size
+                    heart_img = self._get_sprite_scaled_by_world_h('heart', rh * 0.9)
+                    rect_h = heart_img.get_rect()
+                    rect_h.center = (hx, hy)
+                    screen.blit(heart_img, rect_h)
+                else:
+                    size_px = int(max(16, rh * self._px_scale() * 0.8))
+                    col = (255, 0, 64)
+                    pygame.draw.circle(screen, col, (hx - size_px // 3, hy), size_px // 3)
+                    pygame.draw.circle(screen, col, (hx + size_px // 3, hy), size_px // 3)
+                    points = [(hx - size_px // 1.5, hy), (hx + size_px // 1.5, hy), (hx, hy + size_px)]
+                    pygame.draw.polygon(screen, col, points)
+                    pygame.draw.circle(screen, (255, 255, 255), (hx - size_px // 3, hy), size_px // 3, 1)
+                    pygame.draw.circle(screen, (255, 255, 255), (hx + size_px // 3, hy), size_px // 3, 1)
 
             # HUD: coins, time (seconds), powerup
             coins_text = f"Coins: {info.get('coins_collected', 0)}/{info.get('coins_total', 0)}"
@@ -720,6 +971,13 @@ class Renderer:
             hud_text = f"{coins_text}  {time_text}  {fit_text}  {pwr_text}"
             text_surface = self.font.render(hud_text, True, (230, 230, 230))
             screen.blit(text_surface, (10, 10))
+
+            # Pause overlay
+            if paused and policy is not None:
+                pause_surface = self.font_big.render("Paused (SPACE to resume)", True, (255, 255, 0))
+                pr = pause_surface.get_rect()
+                pr.center = (self._size[0] // 2, 28)
+                screen.blit(pause_surface, pr)
 
             # Visualize rays when requested
             if log_rays and info.get('ray_types') is not None and info.get('ray_dists') is not None:
@@ -767,8 +1025,8 @@ class Renderer:
                 pr.right = self._size[0] - 10
                 screen.blit(prog_surface, pr)
 
-            # Label + parsed meta
-            if label:
+            # Label + parsed meta — disabled (already shown top-right)
+            if False and label:
                 base = os.path.basename(label)
                 gen, fit, seed = self._parse_ckpt_meta(base)
                 # Prefer JSON sidecar for meta; we will not show recorded fitness/best to avoid confusion
@@ -803,6 +1061,13 @@ class Renderer:
                     label_surface = self.font.render(base, True, (200, 200, 255))
                     screen.blit(label_surface, (10, 30))
 
+            # Early-out if a reload is requested between frames
+            try:
+                if reload_event is not None and callable(getattr(reload_event, 'is_set', None)) and reload_event.is_set():
+                    print("[watch] reload requested during episode -> exiting early")
+                    return None
+            except Exception:
+                pass
             pygame.display.flip()
             first_frame = False
             self.clock.tick(fps)
@@ -820,7 +1085,11 @@ class Renderer:
                     break
 
 
-def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False, show_intro: bool = False, fullscreen: bool = False, log_rays: bool = False, seed: Optional[int] = None, oneshot: bool = False, contrail: bool = False, contrail_alpha: float = 0.01) -> None:
+def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_hitboxes: bool = False, show_intro: bool = False, fullscreen: bool = False, log_rays: bool = False, seed: Optional[int] = None, oneshot: bool = False, contrail: bool = False, contrail_alpha: float = 0.01, contrail_mod: int = 1, start_from_latest: bool = False, allow_navigation: bool = True, reload_event: Optional[object] = None) -> None:
+    try:
+        print(f"[renderer] start: contrail={contrail} alpha={contrail_alpha} mod={contrail_mod} allow_navigation={allow_navigation}")
+    except Exception:
+        pass
     # If one checkpoint is provided, prefer JSON sidecar epseed/seed; else parse filename
     seed_for_env: Optional[int] = seed
     if seed_for_env is None and weights_paths and len(weights_paths) == 1:
@@ -848,7 +1117,7 @@ def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_h
     if not weights_paths:
         if show_intro:
             renderer.show_intro(env)
-        renderer.render_episode(env, None, speed=speed, show_hitboxes=show_hitboxes, log_rays=log_rays, contrail=contrail, contrail_alpha=contrail_alpha)
+        renderer.render_episode(env, None, speed=speed, show_hitboxes=show_hitboxes, log_rays=log_rays, contrail=contrail, contrail_alpha=contrail_alpha, contrail_mod=contrail_mod)
         renderer.close()
         return
 
@@ -883,14 +1152,40 @@ def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_h
         key=lambda p: (-get_fit_and_gen(p)[1], -get_fit_and_gen(p)[0])
     )
 
+    # Debug: show planned render order
+    try:
+        order_lines = []
+        for p in weights_paths:
+            fit_v, gen_v = get_fit_and_gen(p)
+            order_lines.append(f"gen={gen_v} fit={fit_v:.3f} file={os.path.basename(p)}")
+        if order_lines:
+            print("[renderer] Render order (gen desc, fit desc):")
+            for line in order_lines:
+                print("[renderer]  ", line)
+    except Exception:
+        pass
+
     total = len(weights_paths)
+    # After sorting gen DESC, the newest is first. Start from index 1.
     idx = 1
+    loop_iter = 0
     while idx <= len(weights_paths):
         path = weights_paths[idx - 1]
+        try:
+            print(f"[render-loop] iter={loop_iter} idx={idx}/{total} file={os.path.basename(path)}")
+            sys.stdout.flush()
+        except Exception:
+            pass
+        try:
+            fit_v, gen_v = get_fit_and_gen(path)
+            print(f"[renderer] Playing {idx}/{total}: gen={gen_v} fit={fit_v:.3f} file={os.path.basename(path)}")
+        except Exception:
+            pass
         # If a seed tag exists per file, reseed env to reproduce that episode deterministically
         base = os.path.basename(path)
         # CLI seed overrides epseed/seed; otherwise prefer JSON sidecar epseed over seed when present
         if seed is not None:
+            print(f"[seed] Using CLI-provided seed={seed}")
             env = PlatformerEnv(GameConfig(), seed=seed)
         else:
             chosen_seed = None
@@ -899,7 +1194,9 @@ def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_h
                 with open(path + ".json", "r") as f:
                     meta = json.load(f)
                     chosen_seed = meta.get("epseed") or meta.get("seed")
-            except Exception:
+                    print(f"[seed] Loaded JSON sidecar for {os.path.basename(path)} -> epseed={meta.get('epseed')} seed={meta.get('seed')}")
+            except Exception as e:
+                print(f"[seed] No/invalid JSON for {os.path.basename(path)}: {e}")
                 chosen_seed = None
             if chosen_seed is None:
                 m_ep = re.search(r"epseed(\d+)", base)
@@ -911,23 +1208,103 @@ def render(weights_paths: Optional[List[str]] = None, speed: float = 1.0, show_h
                         chosen_seed = None
             if chosen_seed is not None:
                 try:
+                    print(f"[seed] Reseeding env with chosen_seed={chosen_seed}")
                     env = PlatformerEnv(GameConfig(), seed=int(chosen_seed))
                 except Exception:
                     env = PlatformerEnv(GameConfig())
+            else:
+                print("[seed] No seed found; using default env seed")
 
         cfg = MLPPolicyConfig(input_size=env.observation_size, output_size=env.action_size)
+        print(f"[policy] cfg: input_size={cfg.input_size} output_size={cfg.output_size}")
         policy = MLPPolicy(cfg)
+        print(f"[weights] loading: {os.path.basename(path)}")
         flat = np.load(path)
+        print(f"[weights] shape={flat.shape} dtype={flat.dtype}")
         policy.set_flat(flat)
-        renderer.render_episode(env, policy, speed=speed, label=path, progress=(idx, total), show_hitboxes=show_hitboxes, log_rays=log_rays, contrail=contrail, contrail_alpha=contrail_alpha)
+        print("[policy] set_flat completed")
+        print(f"[nav] calling render_episode(idx={idx}/{total}, oneshot={oneshot}, allow_navigation={allow_navigation})")
+        nav = renderer.render_episode(env, policy, speed=speed, label=path, progress=(idx, total), show_hitboxes=show_hitboxes, log_rays=log_rays, contrail=contrail, contrail_alpha=contrail_alpha, contrail_mod=contrail_mod, reload_event=reload_event)
+        print(f"[nav] returned from render_episode with nav={nav}")
+        # If a watcher requested reload, exit render immediately so caller can restart
+        try:
+            if reload_event is not None and callable(getattr(reload_event, 'is_set', None)) and reload_event.is_set():
+                print("[watch] reload requested -> returning from render()")
+                return None
+        except Exception:
+            pass
         if oneshot:
-            return
-        # After each playback, hold for 3s; SPACE/ENTER advances, otherwise loop same run
-        advance = renderer.hold_or_advance(seconds=3.0)
-        if advance:
-            idx += 1
-        else:
-            # Loop same checkpoint again
+            print("[nav] oneshot=True -> returning from render() immediately")
+            return None
+        # After playback, allow navigation: Right advances, Left goes back; otherwise in contrail do not auto-advance
+        print(f"[nav] post-episode: received nav={nav} allow_navigation={allow_navigation} idx={idx}")
+        if allow_navigation and nav == 'next':
+            next_idx = 1 if idx >= total else idx + 1
+            wrap_note = " (wrap)" if next_idx == 1 and idx == total else ""
+            print(f"[nav] applying 'next': {idx} -> {next_idx}{wrap_note} (before debounce)")
+            idx = next_idx
+            renderer._debounce_navigation()
+            print(f"[nav] applied 'next': new idx={idx}; continuing loop")
+            loop_iter += 1
             continue
+        if allow_navigation and nav == 'prev':
+            prev_idx = total if idx <= 1 else idx - 1
+            wrap_note = " (wrap)" if prev_idx == total and idx == 1 else ""
+            print(f"[nav] applying 'prev': {idx} -> {prev_idx}{wrap_note} (before debounce)")
+            idx = prev_idx
+            renderer._debounce_navigation()
+            print(f"[nav] applied 'prev': new idx={idx}; continuing loop")
+            loop_iter += 1
+            continue
+        if contrail:
+            # In contrail snapshot, do not auto-progress. Wait briefly for navigation keys only.
+            print("[nav] contrail hold: waiting for nav keys")
+            hold_nav = renderer.hold_or_navigate(seconds=3.0) if allow_navigation else None
+            if allow_navigation and hold_nav == 'next':
+                next_idx = 1 if idx >= total else idx + 1
+                wrap_note = " (wrap)" if next_idx == 1 and idx == total else ""
+                print(f"[nav] hold next -> {idx} -> {next_idx}{wrap_note}")
+                idx = next_idx
+                renderer._debounce_navigation()
+                loop_iter += 1
+            elif allow_navigation and hold_nav == 'prev':
+                prev_idx = total if idx <= 1 else idx - 1
+                wrap_note = " (wrap)" if prev_idx == total and idx == 1 else ""
+                print(f"[nav] hold prev -> {idx} -> {prev_idx}{wrap_note}")
+                idx = prev_idx
+                renderer._debounce_navigation()
+                loop_iter += 1
+            else:
+                # Stay on the same generation until user navigates
+                if not allow_navigation:
+                    print("[nav] navigation disabled (watch mode) -> staying on same generation")
+                else:
+                    print("[nav] no nav key -> staying on same generation")
+                continue
+        else:
+            print("[nav] normal hold: waiting for nav keys or timeout")
+            hold_nav = renderer.hold_or_navigate(seconds=3.0) if allow_navigation else None
+            if allow_navigation and hold_nav == 'next':
+                next_idx = 1 if idx >= total else idx + 1
+                wrap_note = " (wrap)" if next_idx == 1 and idx == total else ""
+                print(f"[nav] hold next -> {idx} -> {next_idx}{wrap_note}")
+                idx = next_idx
+                renderer._debounce_navigation()
+                loop_iter += 1
+            elif allow_navigation and hold_nav == 'prev':
+                prev_idx = total if idx <= 1 else idx - 1
+                wrap_note = " (wrap)" if prev_idx == total and idx == 1 else ""
+                print(f"[nav] hold prev -> {idx} -> {prev_idx}{wrap_note}")
+                idx = prev_idx
+                renderer._debounce_navigation()
+                loop_iter += 1
+            else:
+                # Loop same checkpoint again
+                if not allow_navigation:
+                    print("[nav] navigation disabled (watch mode) -> loop same")
+                else:
+                    print("[nav] no nav key -> loop same")
+                loop_iter += 1
+                continue
 
     renderer.close()

@@ -100,11 +100,10 @@ def cmd_render(args: argparse.Namespace) -> int:
     if args.ckpt_dir:
         try:
             files_all = [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith(".npy")]
-            # Prefer GA checkpoints that include a generation tag; keep others at the end
-            import re
+            # Prefer GA checkpoints with a generation tag; keep others after. Then let renderer sort by gen/fit desc.
             files_gen = [p for p in files_all if re.search(r"gen\d+", os.path.basename(p))]
             files_other = [p for p in files_all if p not in files_gen]
-            files = sorted(files_gen) + sorted(files_other)
+            files = files_gen + files_other
             # Optional selection by generation tag
             if getattr(args, 'gen', None) is not None:
                 want_gen = int(args.gen)
@@ -127,23 +126,148 @@ def cmd_render(args: argparse.Namespace) -> int:
         except Exception as e:
             logging.error("Failed to list checkpoints in %s: %s", args.ckpt_dir, e)
             return 1
-    # Optional watch mode: repeatedly play the latest checkpoint when directory updates
+    # Optional watch mode: repeatedly play checkpoints when directory updates
     if getattr(args, 'watch', False) and args.ckpt_dir:
-        last_seen = set()
-        while True:
-            files_all = [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith('.npy')]
-            files_all.sort()
-            current = set(files_all)
-            if current - last_seen:
-                time.sleep(1.0)  # debounce filesystem writes
+        print(f"[watch] Watching {args.ckpt_dir} for new checkpoints... (Ctrl+C to quit)")
+        # First try event-driven watching; fall back to polling if unavailable
+        try:
+            import threading
+            from watchdog.observers import Observer  # type: ignore
+            from watchdog.events import FileSystemEventHandler  # type: ignore
+
+            class _CkptHandler(FileSystemEventHandler):
+                def __init__(self, directory: str, notify_evt: 'threading.Event') -> None:
+                    super().__init__()
+                    self._dir = directory
+                    self._notify = notify_evt
+                def _is_ckpt(self, path: str) -> bool:
+                    try:
+                        if os.path.dirname(path) != self._dir:
+                            return False
+                        return path.endswith('.npy') or path.endswith('.json')
+                    except Exception:
+                        return False
+                def on_created(self, event):  # type: ignore[override]
+                    if getattr(event, 'is_directory', False):
+                        return
+                    if self._is_ckpt(event.src_path):
+                        print(f"[watch] created: {os.path.basename(event.src_path)}")
+                        self._notify.set()
+                def on_moved(self, event):  # type: ignore[override]
+                    if getattr(event, 'is_directory', False):
+                        return
+                    if self._is_ckpt(getattr(event, 'dest_path', '')) or self._is_ckpt(getattr(event, 'src_path', '')):
+                        print(
+                            f"[watch] moved: src={os.path.basename(getattr(event, 'src_path', ''))} -> dst={os.path.basename(getattr(event, 'dest_path', ''))}"
+                        )
+                        self._notify.set()
+                def on_modified(self, event):  # type: ignore[override]
+                    if getattr(event, 'is_directory', False):
+                        return
+                    if self._is_ckpt(event.src_path):
+                        print(f"[watch] modified: {os.path.basename(event.src_path)}")
+                        self._notify.set()
+
+            changed = threading.Event()
+            observer = Observer()
+            handler = _CkptHandler(os.path.abspath(args.ckpt_dir), changed)
+            observer.schedule(handler, args.ckpt_dir, recursive=False)
+            observer.start()
+            try:
+                last_snapshot: list[str] = []
+                last_played: str | None = None
+                # Initial playback of current latest, if any
                 files_all = [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith('.npy')]
+                files_all.sort()
                 if files_all:
-                    latest = sorted(files_all)[-1]
-                    do_render([latest], speed=float(args.speed), show_hitboxes=bool(args.hitboxes), fullscreen=bool(args.fullscreen), log_rays=bool(args.log_rays), seed=args.seed, oneshot=True, contrail=bool(args.contrail), contrail_alpha=float(args.contrail_alpha))
-                last_seen = set(files_all)
-            time.sleep(0.5)
+                    newest0 = os.path.basename(files_all[-1])
+                    print(f"[watch] initial snapshot: {len(files_all)} files; newest={newest0}")
+                    try:
+                        changed.clear()
+                        do_render(
+                            files_all,
+                            speed=float(args.speed),
+                            show_hitboxes=bool(args.hitboxes),
+                            fullscreen=bool(args.fullscreen),
+                            log_rays=bool(args.log_rays),
+                            seed=args.seed,
+                            oneshot=False,
+                            contrail=bool(getattr(args, 'contrail', False)),
+                            contrail_alpha=float(getattr(args, 'contrail_alpha', 0.01)),
+                            contrail_mod=int(getattr(args, 'contrail_mod', 1)),
+                            start_from_latest=True,
+                            allow_navigation=True,
+                            reload_event=changed,
+                        )
+                    except BaseException as e:
+                        print(f"[watch] render aborted: {type(e).__name__}: {e}")
+                        observer.stop()
+                        raise
+                    last_snapshot = list(files_all)
+                    last_played = files_all[-1]
+                while True:
+                    # Wait for a change or periodic tick
+                    changed.wait(timeout=1.0)
+                    if not changed.is_set():
+                        continue
+                    changed.clear()
+                    # Debounce write bursts a bit; also if another event arrives during debounce, keep it set
+                    time.sleep(0.4)
+                    # Keep 'changed' set so render() can detect and return
+                    changed.set()
+                    files_all = [os.path.join(args.ckpt_dir, f) for f in os.listdir(args.ckpt_dir) if f.endswith('.npy')]
+                    files_all.sort()
+                    newest = files_all[-1] if files_all else None
+                    if files_all:
+                        print(f"[watch] change observed: {len(files_all)} files; newest={os.path.basename(newest) if newest else 'None'}")
+                    if files_all and (files_all != last_snapshot or newest != last_played):
+                        print("[watch] reloading renderer with updated checkpoint set")
+                        try:
+                            changed.clear()
+                            do_render(
+                                files_all,
+                                speed=float(args.speed),
+                                show_hitboxes=bool(args.hitboxes),
+                                fullscreen=bool(args.fullscreen),
+                                log_rays=bool(args.log_rays),
+                                seed=args.seed,
+                                oneshot=False,
+                                contrail=bool(getattr(args, 'contrail', False)),
+                                contrail_alpha=float(getattr(args, 'contrail_alpha', 0.01)),
+                                contrail_mod=int(getattr(args, 'contrail_mod', 1)),
+                                start_from_latest=True,
+                                allow_navigation=True,
+                                reload_event=changed,
+                            )
+                        except BaseException as e:
+                            print(f"[watch] render aborted: {type(e).__name__}: {e}")
+                            observer.stop()
+                            raise
+                        last_snapshot = list(files_all)
+                        last_played = newest
+                    else:
+                        print("[watch] no effective change in snapshot; skipping reload")
+            except KeyboardInterrupt:
+                print("Stopped watching.")
+                observer.stop()
+            finally:
+                observer.join()
+            return 0
+        except Exception:
+            print("Error: --watch requires the 'watchdog' package. Install with: pip install watchdog", file=sys.stderr)
+            return 1
     else:
-        do_render(weights, speed=float(args.speed), show_hitboxes=bool(args.hitboxes), fullscreen=bool(args.fullscreen), log_rays=bool(args.log_rays), seed=args.seed, contrail=bool(args.contrail), contrail_alpha=float(args.contrail_alpha))
+        do_render(
+            weights,
+            speed=float(args.speed),
+            show_hitboxes=bool(args.hitboxes),
+            fullscreen=bool(args.fullscreen),
+            log_rays=bool(args.log_rays),
+            seed=args.seed,
+            contrail=bool(getattr(args, 'contrail', False)),
+            contrail_alpha=float(getattr(args, 'contrail_alpha', 0.01)),
+            contrail_mod=int(getattr(args, 'contrail_mod', 1)),
+        )
     return 0
 
 
@@ -188,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--watch", action='store_true', help="Watch ckpt dir and auto-play the latest checkpoint when new files appear")
     pr.add_argument("--contrail", action='store_true', help="Do not clear screen each frame; draw character at low alpha to leave a trail")
     pr.add_argument("--contrail-alpha", type=float, default=0.01, help="Alpha (0..1) for contrail ghost (default 0.01)")
+    pr.add_argument("--contrail-mod", type=int, default=1, help="Draw character ghost every N frames in contrail mode (default 1)")
     pr.add_argument("--hitboxes", action='store_true', help="Overlay collision hitboxes")
     pr.add_argument("--fullscreen", action='store_true', help="Open the window in fullscreen (toggle with F11)")
     pr.add_argument("--log-rays", action='store_true', help="Print raycast hits/distances during playback")

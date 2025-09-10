@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve repo root (one dir up from this script)
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+
+# Choose python (prefer project .venv)
 if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
   PY="$ROOT_DIR/.venv/bin/python"
 else
   PY="python3"
 fi
 
-CKPT_DIR="${1:-$ROOT_DIR/checkpoints}"
-
-exec "$PY" -m platformer render \
-  --ckpt-dir "$CKPT_DIR" \
-  --speed 3 \
-  --watch \
-  "$@"
+# Launch manual play (renderer with keyboard controls)
+exec "$PY" -m platformer play "$@"
 
 
