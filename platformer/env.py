@@ -142,6 +142,8 @@ class GameConfig:
     # Exploration bitfield observation (8x8 grid across the map)
     exploration_grid_size: int = 8
     exploration_enabled: bool = True
+    # Exploration reward when a new grid cell is visited (enabled only when exploration_enabled)
+    explore_bonus: float = 250.0
 
     def __post_init__(self) -> None:
         # Derive dt and episode_length from tickrate and episode time
@@ -494,8 +496,9 @@ class PlatformerEnv:
         self.y = new_y
 
         # Update exploration bits
+        explored_new = False
         if cfg.exploration_enabled:
-            self._mark_explored(self.x, self.y)
+            explored_new = self._mark_explored(self.x, self.y)
 
         # If we just landed this frame, start jump cooldown
         if (not was_on_ground) and self.on_ground:
@@ -557,6 +560,8 @@ class PlatformerEnv:
         reward += coin_reward_total
         if jump_initiated:
             reward -= cfg.jump_penalty
+        if explored_new:
+            reward += float(getattr(cfg, 'explore_bonus', 250.0))
         if succeed:
             time_ratio = max(0.0, 1.0 - (self.timestep / float(max(1, cfg.episode_length))))
             reward += cfg.finish_base_bonus + cfg.finish_speed_bonus * time_ratio
@@ -578,6 +583,7 @@ class PlatformerEnv:
             "collided_top_y": None,
             "time_remaining": max(0, cfg.episode_length - self.timestep),
             "has_jump_powerup": self.has_jump_powerup,
+            "explore_new": explored_new,
             # Raycast diagnostics for renderer/UI consumers
             "ray_updated": ray_updated if cfg.raycast_enabled else False,
             "ray_types": (self._ray_obs_types if cfg.raycast_enabled and hasattr(self, '_ray_obs_types') else None),
@@ -760,14 +766,19 @@ class PlatformerEnv:
         return thit if thit >= 0 else None
 
     # ------------------------ Exploration bitfield helpers -------------------
-    def _mark_explored(self, x: float, y: float) -> None:
-        """Mark the 8x8 sector containing (x,y) as explored in the 64-bit field."""
+    def _mark_explored(self, x: float, y: float) -> bool:
+        """Mark the 8x8 sector containing (x,y) as explored in the 64-bit field.
+        Returns True if a previously unvisited cell was newly explored this call.
+        """
         grid = int(max(1, getattr(self.config, 'exploration_grid_size', 8)))
         cell_w = float(self.config.width) / float(grid)
         cell_h = float(self.config.height) / float(grid)
         cx = int(min(grid - 1, max(0, int(x / max(1e-6, cell_w)))))
         cy = int(min(grid - 1, max(0, int(y / max(1e-6, cell_h)))))
         idx = cy * grid + cx  # row-major, bottom row cy=0
-        self._explore_bits |= (1 << idx)
+        before = self._explore_bits
+        mask = (1 << idx)
+        self._explore_bits |= mask
+        return (before & mask) == 0
 
  

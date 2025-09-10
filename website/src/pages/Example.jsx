@@ -1,6 +1,22 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 export default function Example() {
+  const [lightboxSrc, setLightboxSrc] = useState(null)
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') setLightboxSrc(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const makeZoomable = (src) => ({
+    onClick: () => setLightboxSrc(src),
+    style: { cursor: 'zoom-in' }
+  })
+
   return (
     <div>
       <center><h1 style={{ marginTop: 24 }}>Collect Coins For Heidi!</h1></center>
@@ -41,7 +57,7 @@ export default function Example() {
         <li><strong>Aggregation</strong>: fitness is total episode reward (averaged across eval runs)</li>
       </ul>
       <h3 style={{ marginTop: 24 }}>maps and generalization</h3>
-      <img src="/img/map.png" alt="Map editor preview" style={{ width: '50%', borderRadius: 12, display: 'block', margin: '8px auto 12px' }} />
+      <img src="/img/map.png" alt="Map editor preview" {...makeZoomable('/img/map.png')} style={{ width: '25%', borderRadius: 12, display: 'block', margin: '8px auto 12px', cursor: 'zoom-in' }} />
       <p>
         The level is driven by an easy-to-edit ASCII map. Adding or tweaking platforms, coins, and entities is fast,
         which makes iterating on environments simple. One obvious next step would be to add <em>multi-map training</em> — i.e. training across
@@ -49,7 +65,7 @@ export default function Example() {
       </p>
 
       <h3 style={{ marginTop: 24 }}>training the model</h3>
-      <img src="/img/train.png" alt="Training logs preview" style={{ width: '50%', borderRadius: 12, display: 'block', margin: '8px auto 12px' }} />
+      <img src="/img/train.png" alt="Training logs preview" {...makeZoomable('/img/train.png')} style={{ width: '50%', borderRadius: 12, display: 'block', margin: '8px auto 12px', cursor: 'zoom-in' }} />
       <p>
         During training, thousands of competing games are simulated in parallel using mutated variants of the policy.
         Progress is tracked by watching for new best-performers (see <em>max</em> in the logs) and the average population
@@ -60,15 +76,15 @@ export default function Example() {
       <h3 style={{ marginTop: 24 }}>contrail snapshots</h3>
       <div className="contrail-gallery">
         <div className="contrail-item" style={{ textAlign: 'center' }}>
-          <img src="/img/first_gen.png" alt="First generation contrail" style={{ borderRadius: 12 }} />
+          <img src="/img/first_gen.png" alt="First generation contrail" {...makeZoomable('/img/first_gen.png')} style={{ borderRadius: 12, cursor: 'zoom-in' }} />
           <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>First gen: no learning yet; follows the goal-only hint.</div>
         </div>
         <div className="contrail-item" style={{ textAlign: 'center' }}>
-          <img src="/img/stuck.png" alt="Stuck contrail" style={{ borderRadius: 12 }} />
+          <img src="/img/stuck.png" alt="Stuck contrail" {...makeZoomable('/img/stuck.png')} style={{ borderRadius: 12, cursor: 'zoom-in' }} />
           <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>Stuck: learned to grab boots and found the coin chamber; explores hotspot.</div>
         </div>
         <div className="contrail-item" style={{ textAlign: 'center' }}>
-          <img src="/img/success.png" alt="Successful contrail" style={{ borderRadius: 12 }} />
+          <img src="/img/success.png" alt="Successful contrail" {...makeZoomable('/img/success.png')} style={{ borderRadius: 12, cursor: 'zoom-in' }} />
           <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>Success: collects many coins and delivers them to Heidi at the goal.</div>
         </div>
       </div>
@@ -93,18 +109,37 @@ export default function Example() {
       <h3 style={{ marginTop: 24 }}>raycasting</h3>
       <div className="contrail-gallery">
         <div className="contrail-item" style={{ textAlign: 'center' }}>
-          <img src="/img/raycast1.png" alt="Raycast step 1" />
+          <img src="/img/raycast1.png" alt="Raycast step 1" {...makeZoomable('/img/raycast1.png')} style={{ cursor: 'zoom-in' }} />
           <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>A coin is detected top-right.  Simple radial raycasting is performed every few frames.</div>
         </div>
         <div className="contrail-item" style={{ textAlign: 'center' }}>
-          <img src="/img/raycast2.png" alt="Raycast step 2" />
+          <img src="/img/raycast2.png" alt="Raycast step 2" {...makeZoomable('/img/raycast2.png')} style={{ cursor: 'zoom-in' }} />
           <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>A coin is detected in front and behind.  On frames where raycasts aren’t sampled, prior results are reused along with a separate recency score.</div>
         </div>
         <div className="contrail-item" style={{ textAlign: 'center' }}>
-          <img src="/img/raycast3.png" alt="Raycast step 3" />
+          <img src="/img/raycast3.png" alt="Raycast step 3" {...makeZoomable('/img/raycast3.png')} style={{ cursor: 'zoom-in' }} />
           <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>A coin is detected down and to the left.  Awareness of immediate surroundings helps the model reach higher fitness in fewer generations and improves generality.</div>
         </div>
       </div>
+      {lightboxSrc && createPortal(
+        (
+          <div
+            onClick={() => setLightboxSrc(null)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 2147483647,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
+            }}
+          >
+            <img
+              src={lightboxSrc}
+              alt=""
+              onClick={(e) => e.stopPropagation()}
+              style={{ maxWidth: '95vw', maxHeight: '95vh', borderRadius: 12, boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+            />
+          </div>
+        ),
+        document.body
+      )}
     </div>
   )
 }

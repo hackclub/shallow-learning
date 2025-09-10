@@ -4,11 +4,13 @@ import Overview from './pages/Overview'
 import Example from './pages/Example'
 import FAQ from './pages/FAQ'
 import Submit from './pages/Submit'
+import BackgroundNetwork from './components/BackgroundNetwork'
 
 export default function App() {
   const navbarHeight = 75
   return (
-    <div style={{ backgroundColor: '#fff', minHeight: '100vh' }}>
+    <div style={{ backgroundColor: 'transparent', minHeight: '100vh', position: 'relative', zIndex: 0 }}>
+      <BackgroundNetwork />
       <div
         style={{
           position: 'fixed',
@@ -16,7 +18,8 @@ export default function App() {
           left: 0,
           right: 0,
           height: navbarHeight,
-          backgroundColor: '#e9ecef'
+          backgroundColor: '#e9ecef',
+          zIndex: 2
         }}
       >
         <div style={{ position: 'relative', height: '100%' }}>
