@@ -36,10 +36,24 @@
         .nav-menu { gap: 4px !important; }
         .nav-menu .nav-link { width: 66px; height: 32px; font-size: 10px; }
       }
+      /* Contrail gallery responsive layout */
+      .contrail-gallery { display: flex; gap: 20px; justify-content: space-between; align-items: flex-start; flex-wrap: nowrap; }
+      .contrail-gallery .contrail-item { flex: 1 1 0; max-width: 33.333%; }
+      .contrail-gallery .contrail-item img { width: 100%; height: auto; border-radius: 12px; }
+      @media (max-width: 768px) {
+        .contrail-gallery { flex-wrap: wrap; }
+        .contrail-gallery .contrail-item { flex: 1 1 48%; max-width: 48%; }
+        #github-link { display: none !important; }
+      }
+      @media (max-width: 480px) {
+        .contrail-gallery { flex-direction: column; align-items: center; }
+        .contrail-gallery .contrail-item { flex: 1 1 100%; max-width: 100%; }
+        #github-link { display: none !important; }
+      }
     </style>
   </head>
   <body>
-    <a href="https://hackclub.com/"><img id="hc-flag" style="position: absolute; top: 0; left: 24px; border: 0; width: 128px; z-index: 999;" src="https://assets.hackclub.com/flag-orpheus-top.svg" alt="Hack Club"/></a>    <div id="root"></div>
+    <a href="https://hackclub.com/"><img id="hc-flag" style="position: fixed; top: 0; left: 0; border: 0; width: 128px; z-index: 999;" src="/img/flag-orpheus-top.png" alt="Hack Club"/></a>    <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
   </html>

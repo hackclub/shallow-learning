@@ -1,4 +1,5 @@
 import React from 'react'
+import { Link } from 'react-router-dom'
 
 export default function FAQ() {
   return (
@@ -13,7 +14,7 @@ export default function FAQ() {
 
       <h3 style={{ marginTop: 24 }}>you could...</h3>
       <ul>
-        <li>build a game using <a href="https://www.pygame.org/docs/">pygame</a> that self-learns a neural network using a genetic algorithm (my example)</li>
+        <li>build a game using <a href="https://www.pygame.org/docs/">pygame</a> that self-learns a neural network using a genetic algorithm (<Link to="/example">my example</Link>)</li>
         <li>
           create a new <a href="https://developer.gimp.org/" target="_blank" rel="noreferrer noopener">GIMP</a> filter that manipulates image content, for instance a style-aware smart brush
         </li>

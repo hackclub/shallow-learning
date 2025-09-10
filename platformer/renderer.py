@@ -906,7 +906,8 @@ class Renderer:
                     screen.blit(dino, rect)
 
             # Overlay boots on dinosaur if powerup active (smaller and at feet)
-            if info.get('has_jump_powerup'):
+            # Skip when drawing the celebration pair (boots already drawn there)
+            if (not pair_drawn) and info.get('has_jump_powerup'):
                 boot_w = float(getattr(cfg, 'player_w', 0.8)) * 0.6
                 boot_h = float(getattr(cfg, 'player_h', 0.8)) * 0.38
                 boots = self._get_sprite_scaled_to_rect('boots', boot_w, boot_h)
