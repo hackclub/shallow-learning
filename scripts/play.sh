@@ -12,6 +12,6 @@ else
 fi
 
 # Launch manual play (renderer with keyboard controls)
-exec "$PY" -m platformer play "$@"
+exec "$PY" -m platformer play --fullscreen"$@"
 
 

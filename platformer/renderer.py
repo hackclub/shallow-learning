@@ -225,20 +225,25 @@ class Renderer:
         if not pygame.get_init():
             pygame.init()
         width_px, height_px = self._size
-        # derive UNIFORM scale from width (zoomed view).
-        s = width_px / float(max(1e-6, cfg.width))
+        # Derive a UNIFORM scale that ensures the entire world height fits on screen.
+        # Use the more restrictive of the width- and height-based scales.
+        s_w = width_px / float(max(1e-6, cfg.width))
+        # When a map is present, the visible world height is exactly cfg.height.
+        # Otherwise we leave 1m padding below for a nicer baseline.
+        height_world = float(cfg.height if getattr(cfg, 'level_map', None) else (cfg.height + 1.0))
+        s_h = height_px / float(max(1e-6, height_world))
+        s = min(s_w, s_h)
         self.scale_x = s
         self.scale_y = s
         world_px_w = int(round(cfg.width * s))
         self._offset_x_px = (width_px - world_px_w) // 2
-        # Align bottom row of ASCII map (if any) with y=0. Place floor exactly
-        # 1 tile above the bottom of the window when a map is present.
-        # Align bottom row to exact window bottom (no padding) when level_map is set
+        # Vertical alignment: keep the world fully within the window.
         if getattr(cfg, 'level_map', None):
-            self._offset_y_px = int(round(height_px - (cfg.height) * s))
+            # Align bottom of world (y=0) to window bottom; no negative offset so top never clips
+            self._offset_y_px = max(0, int(round(height_px - (cfg.height) * s)))
         else:
-            # default 1m padding when no map is used
-            self._offset_y_px = int(round(height_px - (cfg.height + 1.0) * s))
+            # Default 1m padding when no map is used; clamp to avoid clipping
+            self._offset_y_px = max(0, int(round(height_px - (cfg.height + 1.0) * s)))
         if self.screen is None:
             flags = pygame.FULLSCREEN if self._fullscreen else 0
             self.screen = pygame.display.set_mode((width_px, height_px), flags)
