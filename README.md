@@ -1,4 +1,4 @@
-# Platformer: Headless Arcade Environment + Optional Renderer + GA Trainer
+# COLLECT COINS FOR HEIDI
 
 A minimal Python scaffold for a 2D side-scrolling platformer environment that can run headless for fast simulation, with an optional Pygame renderer for visualization, and a simple genetic algorithm (GA) trainer to evolve a neural network policy.
 
