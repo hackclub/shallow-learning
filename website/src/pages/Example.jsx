@@ -21,18 +21,24 @@ export default function Example() {
     <div>
       <center><h1 style={{ marginTop: 24 }}>Collect Coins For Heidi!</h1></center>
       <p>
-        This simple platformer prototype showcases a compact <a href="https://en.wikipedia.org/wiki/Artificial_neural_network" target="_blank" rel="noreferrer noopener">neural network</a> policy optimized with a
-        <a href="https://en.wikipedia.org/wiki/Genetic_algorithm" target="_blank" rel="noreferrer noopener"> genetic algorithm (GA)</a>.
+        This simple platformer prototype showcases a compact <a href="https://en.wikipedia.org/wiki/Artificial_neural_network" target="_blank" rel="noreferrer noopener">neural network</a> policy optimized with
+        a <a href="https://en.wikipedia.org/wiki/Genetic_algorithm" target="_blank" rel="noreferrer noopener">genetic algorithm (GA)</a>.
         Agents start with random weights and evolve over generations as the GA selects the best performers,
         recombines them, and mutates parameters. The policy learns to navigate platforms, collect coins and powerups, and
         reach the goal using simple scalar feedback (fitness) from each episode.
       </p>
+      
+      <h3 style={{ marginTop: 24 }}>notable features</h3>
       <ul>
-        <li>Neural network controller (MLP) deciding actions from game observations</li>
+        <li>Neural network controller (<a href="https://en.wikipedia.org/wiki/Multilayer_perceptron" target="_blank" rel="noreferrer noopener">multi-layer perceptron</a>) deciding actions from game observations</li>
         <li>Genetic algorithm with selection, crossover, and mutation</li>
-        <li>Fitness signals: coins, finish bonus, (optionally) progress, and small jump costs</li>
         <li>Deterministic replays and checkpoints for inspecting generations</li>
       </ul>
+      <h3 style={{ marginTop: 24 }}>game synopsis/theme</h3>
+      <p>
+        Orpheus (of Hack Club fame) wants to gift Heidi some sweet coins.  To do this, he must jump across platforms, 
+        collect coins and power-ups such as his sweet red dunking boots, and ultimately deliver them.
+      </p>
       <p> Here is an example of gameplay:</p>
       <video
         controls
@@ -47,7 +53,7 @@ export default function Example() {
         Your browser does not support the video tag.
       </video>
       
-      <h3 style={{ marginTop: 24 }}>what feedback did the model get?</h3>
+      <h3 style={{ marginTop: 24 }}>how do we evaluate performance?</h3>
       <ul>
         <li><strong>Forward progress</strong>: reward for moving toward the goal</li>
         <li><strong>Coin collection</strong>: reward when picking up coins</li>
@@ -57,7 +63,7 @@ export default function Example() {
         <li><strong>Aggregation</strong>: fitness is total episode reward (averaged across eval runs)</li>
       </ul>
       <h3 style={{ marginTop: 24 }}>maps and generalization</h3>
-      <img src="/img/map.png" alt="Map editor preview" {...makeZoomable('/img/map.png')} style={{ width: '25%', borderRadius: 12, display: 'block', margin: '8px auto 12px', cursor: 'zoom-in' }} />
+      <img src="/img/map.png" alt="Map editor preview" {...makeZoomable('/img/map.png')} style={{ width: '50%', minWidth: 280, maxWidth: 360, borderRadius: 12, display: 'block', margin: '8px auto 12px', cursor: 'zoom-in' }} />
       <p>
         The level is driven by an easy-to-edit ASCII map. Adding or tweaking platforms, coins, and entities is fast,
         which makes iterating on environments simple. One obvious next step would be to add <em>multi-map training</em> — i.e. training across
@@ -65,7 +71,7 @@ export default function Example() {
       </p>
 
       <h3 style={{ marginTop: 24 }}>training the model</h3>
-      <img src="/img/train.png" alt="Training logs preview" {...makeZoomable('/img/train.png')} style={{ width: '50%', borderRadius: 12, display: 'block', margin: '8px auto 12px', cursor: 'zoom-in' }} />
+      <img src="/img/train.png" alt="Training logs preview" {...makeZoomable('/img/train.png')} style={{ width: '66%', maxWidth: 640, borderRadius: 12, display: 'block', margin: '8px auto 12px', cursor: 'zoom-in' }} />
       <p>
         During training, thousands of competing games are simulated in parallel using mutated variants of the policy.
         Progress is tracked by watching for new best-performers (see <em>max</em> in the logs) and the average population
@@ -99,14 +105,47 @@ export default function Example() {
         <li><strong>Parameters</strong>: all weights (incl. biases) packed into one flat vector for efficient GA crossover/mutation.</li>
       </ul>
 
-      <h3 style={{ marginTop: 24 }}>libraries used</h3>
-      <ul>
-        <li><strong>pygame</strong>: realtime rendering, input handling, assets, and windowing.</li>
-        <li><strong>NumPy</strong>: neural-network math (vectorized MLP forward pass), parameter storage/mutation.</li>
-        <li><strong>watchdog</strong> (optional): file watching for live checkpoint playback with <code>--watch</code>.</li>
-      </ul>
-
+      <h3 style={{ marginTop: 24 }}>observations (inputs)</h3>
+      <p>
+        On every game loop tick, the environment builds a compact observation vector that captures the
+        player state, nearby geometry and pickups, and recent raycast signals. That observation is fed
+        into the policy network as its input, and the network’s outputs determine the next action the
+        agent takes.
+      </p>
+      <div style={{ textAlign: 'center', margin: '8px 0 16px' }}>
+        <img
+          src="/img/observations.png"
+          alt="Observation extraction from game state"
+          {...makeZoomable('/img/observations.png')}
+          style={{ width: '70%', borderRadius: 12, cursor: 'zoom-in' }}
+        />
+        <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
+          How the environment flattens observations and feeds them into the model.
+        </div>
+      </div>
+      <h3 style={{ marginTop: 24 }}>actions (outputs)</h3>
+      <p>
+        Given those inputs, the policy computes action scores and picks the next button press — sometimes a
+        combination like <em>Right + Jump</em> — to move, jump, or interact.
+      </p>
+      <div style={{ textAlign: 'center', margin: '8px 0 16px' }}>
+        <img
+          src="/img/actions.png"
+          alt="Model action outputs and button mapping"
+          {...makeZoomable('/img/actions.png')}
+          style={{ width: '70%', borderRadius: 12, cursor: 'zoom-in' }}
+        />
+        <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
+          The model’s outputs map to discrete button presses or combinations that drive the agent.
+        </div>
+      </div>
       <h3 style={{ marginTop: 24 }}>raycasting</h3>
+      <p>
+        We also use lightweight raycasting to sample what surrounds the player (coins, platforms, walls)
+        in several directions. These signals enrich the observation vector with short-range spatial
+        awareness, helping the policy reason about nearby opportunities and hazards and typically
+        improving learning speed.
+      </p>
       <div className="contrail-gallery">
         <div className="contrail-item" style={{ textAlign: 'center' }}>
           <img src="/img/raycast1.png" alt="Raycast step 1" {...makeZoomable('/img/raycast1.png')} style={{ cursor: 'zoom-in' }} />
@@ -121,6 +160,14 @@ export default function Example() {
           <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>A coin is detected down and to the left.  Awareness of immediate surroundings helps the model reach higher fitness in fewer generations and improves generality.</div>
         </div>
       </div>
+
+      <h3 style={{ marginTop: 24 }}>notable technologies used</h3>
+      <ul>
+        <li><strong>pygame</strong>: realtime rendering, input handling, assets, and windowing.</li>
+        <li><strong>NumPy</strong>: neural-network math (vectorized MLP forward pass), parameter storage/mutation.</li>
+      </ul>
+
+
       {lightboxSrc && createPortal(
         (
           <div

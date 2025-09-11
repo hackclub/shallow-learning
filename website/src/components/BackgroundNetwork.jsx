@@ -24,6 +24,10 @@ export default function BackgroundNetwork() {
       lastDocH: 0
     }
 
+    // Hard-coded large content area so background doesn't reflow between routes
+    const FIXED_DOC_WIDTH = 8000
+    const FIXED_DOC_HEIGHT = 12000
+
     const fit = () => {
       state.dpr = Math.min(2, window.devicePixelRatio || 1)
       const w = Math.floor(window.innerWidth)
@@ -33,10 +37,9 @@ export default function BackgroundNetwork() {
       canvas.style.width = w + 'px'
       canvas.style.height = h + 'px'
       ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0)
-      // World dimensions for seamless scrolling (cover full document with padding)
-      const doc = document.documentElement
-      const docW = Math.max(w, doc.scrollWidth)
-      const docH = Math.max(h, doc.scrollHeight)
+      // World dimensions for seamless scrolling (cover large fixed area regardless of page content)
+      const docW = Math.max(w, FIXED_DOC_WIDTH)
+      const docH = Math.max(h, FIXED_DOC_HEIGHT)
       const padX = Math.ceil(w * 0.75)
       const padY = Math.ceil(h * 0.75)
       state.x0 = -padX
@@ -161,9 +164,8 @@ export default function BackgroundNetwork() {
 
       // If document size grows (e.g., content added), expand world and rebuild nodes/edges
       if (tMs % 1000 < 16) {
-        const doc = document.documentElement
-        const docW = Math.max(window.innerWidth, doc.scrollWidth)
-        const docH = Math.max(window.innerHeight, doc.scrollHeight)
+        const docW = Math.max(window.innerWidth, FIXED_DOC_WIDTH)
+        const docH = Math.max(window.innerHeight, FIXED_DOC_HEIGHT)
         if (docW !== state.lastDocW || docH !== state.lastDocH) {
           fit()
         }
