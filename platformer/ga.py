@@ -90,6 +90,7 @@ def train_ga(env: PlatformerEnv, policy_cfg: MLPPolicyConfig, ga_cfg: GAConfig) 
             population=population,
             episodes=ga_cfg.episodes_per_eval,
             num_workers=int(ga_cfg.num_workers) if ga_cfg.num_workers is not None else 1,
+            base_seed=ga_cfg.seed,
         )
         # Track best
         idx = int(np.argmax(fitness))
@@ -176,12 +177,16 @@ def train_ga(env: PlatformerEnv, policy_cfg: MLPPolicyConfig, ga_cfg: GAConfig) 
     return best_weights, best_fitness
 
 
-def _eval_one_policy(args: tuple[MLPPolicyConfig, GameConfig, np.ndarray, int]) -> float:
-    policy_cfg, env_cfg, flat, episodes = args
-    env = PlatformerEnv(env_cfg)
+def _eval_one_policy(args: tuple[MLPPolicyConfig, GameConfig, np.ndarray, int, int | None]) -> float:
+    policy_cfg, env_cfg, flat, episodes, base_seed = args
     policy = MLPPolicy(policy_cfg)
     policy.set_flat(flat)
-    return evaluate_policy(policy, env, episodes)
+    total = 0.0
+    for ep_idx in range(max(1, episodes)):
+        seed = None if base_seed is None else int(base_seed) + ep_idx
+        env = PlatformerEnv(env_cfg, seed=seed)
+        total += evaluate_policy(policy, env, episodes=1)
+    return total / float(max(1, episodes))
 
 
 def evaluate_population_env(
@@ -190,6 +195,7 @@ def evaluate_population_env(
     population: np.ndarray,
     episodes: int = 1,
     num_workers: int = 1,
+    base_seed: int | None = None,
 ) -> np.ndarray:
     """Evaluate population using PlatformerEnv as the single source of truth.
 
@@ -204,14 +210,18 @@ def evaluate_population_env(
         with ProcessPoolExecutor(max_workers=n) as ex:
             it = ex.map(
                 _eval_one_policy,
-                [(policy_cfg, env_cfg, population[i], episodes) for i in range(P)],
+                [(policy_cfg, env_cfg, population[i], episodes, base_seed) for i in range(P)],
             )
             return np.array(list(it), dtype=np.float32)
     else:
         fitness = np.zeros((P,), dtype=np.float32)
-        env = PlatformerEnv(env_cfg)
         policy = MLPPolicy(policy_cfg)
         for i in range(P):
             policy.set_flat(population[i])
-            fitness[i] = evaluate_policy(policy, env, episodes)
+            total = 0.0
+            for ep_idx in range(max(1, episodes)):
+                seed = None if base_seed is None else int(base_seed) + ep_idx
+                env = PlatformerEnv(env_cfg, seed=seed)
+                total += evaluate_policy(policy, env, episodes=1)
+            fitness[i] = total / float(max(1, episodes))
         return fitness

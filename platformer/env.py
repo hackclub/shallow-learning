@@ -71,16 +71,16 @@ class GameConfig:
         "#.................................................#",
         "#.......................C.........................#",
         "#.......###########################################",
-        "#................................................C#",
-        "#..............................C.C.C.C.C.C.......C#",
+        "#.....................###........................C#",
+        "#.....................###......C.C.C.C.C.C.......C#",
         "#C....................###.......C.C.C.C.C........C#",
         "#................................................C#",
         "#...............................................###",
         "#.................................................#",
-        "#.....###.........................................#",
-        "#.................................................#",
-        "#.................................................#",
-        "#..............................C..................#",
+        "#.....###..................#######................#",
+        "#..........................###....................#",
+        "#..........................###....................#",
+        "#..........................###.C..................#",
         "#................############################.....#", 
         "#................#...................#............#",
         "#C............C..#...................#............#",
@@ -137,7 +137,7 @@ class GameConfig:
     # Raycasting for observations
     raycast_enabled: bool = True
     raycast_max_dist: float = 30.0
-    raycast_interval_s: float = 0.25
+    raycast_interval_s: float = 0.05
 
     # Exploration bitfield observation (8x8 grid across the map)
     exploration_grid_size: int = 8
@@ -512,16 +512,25 @@ class PlatformerEnv:
         # Raycast update cadence
         ray_updated = False
         if cfg.raycast_enabled:
-            # Decrement and update when timer elapses
+            # When interval <= 0, cast every frame. Otherwise, honor the configured cadence.
             if not hasattr(self, '_raycast_time_left_s'):
                 self._raycast_time_left_s = 0.0
-            self._raycast_time_left_s = float(self._raycast_time_left_s) - dt
-            if self._raycast_time_left_s <= 0.0:
+            interval = float(getattr(cfg, 'raycast_interval_s', 0.0))
+            if interval <= 0.0:
                 types, dists = self._compute_raycast_observations()
                 self._ray_obs_types = types
                 self._ray_obs_dists = dists
-                self._raycast_time_left_s += float(max(1e-6, cfg.raycast_interval_s))
+                # Set to a tiny positive so age ratio reports as fresh (0)
+                self._raycast_time_left_s = float(max(1e-6, interval))
                 ray_updated = True
+            else:
+                self._raycast_time_left_s = float(self._raycast_time_left_s) - dt
+                if self._raycast_time_left_s <= 0.0:
+                    types, dists = self._compute_raycast_observations()
+                    self._ray_obs_types = types
+                    self._ray_obs_dists = dists
+                    self._raycast_time_left_s += float(max(1e-6, interval))
+                    ray_updated = True
 
         # Coin collection after movement
         coin_reward_total = 0.0
