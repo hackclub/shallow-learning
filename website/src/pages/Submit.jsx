@@ -84,7 +84,31 @@ export default function Submit() {
             propose
           </button>
           <div style={{ position: 'absolute', marginTop: 220, width: '80%', maxWidth: 720, textAlign: 'center', color: '#333', opacity: hovered === 'propose' ? 1 : 0, transition: 'opacity 180ms ease' }}>
-            Pitch your new project in a 1-2 minute video with voiceover
+            {(() => {
+              const word = 'Pitch'
+              const rest = ' your new project in a 1-2 minute video with voiceover'
+              const letters = Array.from(word)
+              const n = letters.length
+              const period = Math.max(1, 2 * n - 2)
+              let k = tick % period
+              if (k >= n) k = period - k
+              return (
+                <span style={{ fontFamily: 'ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace', letterSpacing: 0.2 }}>
+                  {letters.map((ch, i) => {
+                    const active = i === k
+                    const weight = active ? 900 : 700
+                    const shade = active ? '#000' : '#333'
+                    const glow = active ? '0 0 12px rgba(0,0,0,0.25)' : 'none'
+                    return (
+                      <span key={i} style={{ fontWeight: weight, color: shade, textShadow: glow }}>
+                        {ch}
+                      </span>
+                    )
+                  })}
+                  <span style={{ fontWeight: 500, color: '#333' }}>{rest}</span>
+                </span>
+              )
+            })()}
           </div>
         </div>
         <div ref={orRef} style={{ position: 'relative', flex: '0 0 auto', alignSelf: 'center', fontWeight: 700, color: '#000', opacity: 0.9, fontSize: 18, letterSpacing: 1, width: 64, height: 64, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -113,24 +137,26 @@ export default function Submit() {
             ship
           </button>
           <div style={{ position: 'absolute', marginTop: 220, width: '80%', maxWidth: 720, textAlign: 'center', color: '#333', opacity: hovered === 'ship' ? 1 : 0, transition: 'opacity 180ms ease' }}>
-            Submit your shipped project along with a 5 minute video w/ voiceover for your{' '}
-            {(() => {
-              const colors = ['#ff4757', '#ffa502', '#fffa65', '#2ed573', '#1e90ff', '#a29bfe', '#e056fd']
-              const letters = ['p', 'r', 'i', 'z', 'e']
-              return (
-                <span aria-label="prize animated" style={{ display: 'inline-block' }}>
-                  {letters.map((ch, i) => {
-                    const color = colors[(tick + i) % colors.length]
-                    const bounce = Math.sin((tick + i) * 0.5) * 3
-                    return (
-                      <span key={i} style={{ color, display: 'inline-block', transform: `translateY(${bounce}px)` }}>
-                        {ch}
-                      </span>
-                    )
-                  })}
-                </span>
-              )
-            })()}
+            <span style={{ fontFamily: 'ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace', letterSpacing: 0.2 }}>
+              Submit your shipped project along with a 5 minute video w/ voiceover for your{' '}
+              {(() => {
+                const colors = ['#ff4757', '#ffa502', '#fffa65', '#2ed573', '#1e90ff', '#a29bfe', '#e056fd']
+                const letters = ['p', 'r', 'i', 'z', 'e']
+                return (
+                  <span aria-label="prize animated" style={{ display: 'inline-block' }}>
+                    {letters.map((ch, i) => {
+                      const color = colors[(tick + i) % colors.length]
+                      const bounce = Math.sin((tick + i) * 0.5) * 3
+                      return (
+                        <span key={i} style={{ color, display: 'inline-block', transform: `translateY(${bounce}px)` }}>
+                          {ch}
+                        </span>
+                      )
+                    })}
+                  </span>
+                )
+              })()}
+            </span>
           </div>
         </div>
       </div>

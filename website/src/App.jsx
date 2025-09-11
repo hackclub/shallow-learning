@@ -45,8 +45,10 @@ export default function App() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderRadius: 12,
-                  backgroundColor: isActive ? '#fff' : 'transparent'
+                  backgroundColor: isActive ? '#ffffff' : 'transparent'
                 })}
+                onMouseEnter={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = '#f8f9fa' }}
+                onMouseLeave={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = 'transparent' }}
               >
                 Overview
               </NavLink>
@@ -62,8 +64,10 @@ export default function App() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderRadius: 12,
-                  backgroundColor: isActive ? '#fff' : 'transparent'
+                  backgroundColor: isActive ? '#ffffff' : 'transparent'
                 })}
+                onMouseEnter={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = '#f8f9fa' }}
+                onMouseLeave={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = 'transparent' }}
               >
                 Example
               </NavLink>
@@ -79,8 +83,10 @@ export default function App() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderRadius: 12,
-                  backgroundColor: isActive ? '#fff' : 'transparent'
+                  backgroundColor: isActive ? '#ffffff' : 'transparent'
                 })}
+                onMouseEnter={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = '#f8f9fa' }}
+                onMouseLeave={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = 'transparent' }}
               >
                 FAQ
               </NavLink>
@@ -96,8 +102,10 @@ export default function App() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderRadius: 12,
-                  backgroundColor: isActive ? '#fff' : 'transparent'
+                  backgroundColor: isActive ? '#ffffff' : 'transparent'
                 })}
+                onMouseEnter={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = '#f8f9fa' }}
+                onMouseLeave={(e) => { if (e.currentTarget.getAttribute('aria-current') !== 'page') e.currentTarget.style.backgroundColor = 'transparent' }}
               >
                 Submit
               </NavLink>

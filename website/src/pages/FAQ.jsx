@@ -4,6 +4,13 @@ import { Link } from 'react-router-dom'
 export default function FAQ() {
   return (
     <div>
+      <h3 style={{ marginTop: 24 }}>is this...</h3>
+      <ul>
+        <li>
+          an official Hack Club You Ship, We Ship program? <strong>yes</strong>
+        </li>
+      </ul>
+
       <h3 style={{ marginTop: 24 }}>what is...</h3>
       <ul>
         <li>
@@ -29,12 +36,14 @@ export default function FAQ() {
       <h3 style={{ marginTop: 24 }}>you must...</h3>
       <ul>
         <li>be in good standing at Hack Club and be willing to submit to identity verification for prizes</li>
+        <li>open-source your project if you want to be eligible for the prize</li>
       </ul>
 
       <h3 style={{ marginTop: 24 }}>you may...</h3>
       <ul>
         <li>use the example project as a starting point for your submission, but it must be <em>heavily modified</em> adding impressive features.  We can hash that out in advance, before you start, upon reviewing & approving your proposal video</li>
         <li>use AI to assist the development of your project (I did!)</li>
+        <li>use any supervised or unsupervised ML technique to train your neural network</li>
         <li>
           leverage existing general-use ML libraries
         </li>

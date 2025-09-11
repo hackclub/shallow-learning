@@ -5,10 +5,10 @@ export default function Overview() {
     <div>
 
 <h3 style={{ marginTop: 24 }}>the challenge...</h3>
-<li>ship a project that leverages a not-necessarily-so-deep neural network to produce some cool generated content</li>
+ship a project that leverages a not-necessarily-so-deep neural network to produce some cool generated content
 
       <h3 style={{ marginTop: 24 }}>you must...</h3>
-      <ul>
+      <ol>
         <li>
           submit a 1-2 minute voiceover video proposing your project <b><i>ahead of time</i></b>, before you start its development
           <ul>
@@ -25,7 +25,7 @@ export default function Overview() {
             <li>what cool things you learned during its creation</li>
           </ul>
         </li>
-      </ul>
+      </ol>
 
       <h3 style={{ marginTop: 24 }}>the prizes...</h3>
       <p>
@@ -33,11 +33,10 @@ export default function Overview() {
         costs on any of the following platforms:
       </p>
       <ul>
-        <li>Hugging Face</li>
-        <li>Lumio AI</li>
-        <li>Together AI</li>
-        <li>Replicate</li>
-        <li>Northflank</li>
+        <li><a href="https://huggingface.co" target="_blank" rel="noreferrer noopener">Hugging Face</a></li>
+        <li><a href="https://www.together.ai" target="_blank" rel="noreferrer noopener">Together AI</a></li>
+        <li><a href="https://replicate.com" target="_blank" rel="noreferrer noopener">Replicate</a></li>
+        <li><a href="https://northflank.com" target="_blank" rel="noreferrer noopener">Northflank</a></li>
       </ul>
 
     </div>
