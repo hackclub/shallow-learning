@@ -26,11 +26,17 @@ export default function FAQ() {
         </li>
       </ul>
 
+      <h3 style={{ marginTop: 24 }}>you must...</h3>
+      <ul>
+        <li>be in good standing at Hack Club and be willing to submit to identity verification for prizes</li>
+      </ul>
+
       <h3 style={{ marginTop: 24 }}>you may...</h3>
       <ul>
+        <li>use the example project as a starting point for your submission, but it must be <em>heavily modified</em> adding impressive features.  We can hash that out in advance, before you start, upon reviewing & approving your proposal video</li>
         <li>use AI to assist the development of your project (I did!)</li>
         <li>
-          leverage existing general-use ML libraries (but a special, separate bonus prize will be available for those who write-their-own), but not existing datasets or specific usages
+          leverage existing general-use ML libraries
         </li>
       </ul>
 

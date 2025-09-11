@@ -36,8 +36,8 @@ export default function Example() {
       </ul>
       <h3 style={{ marginTop: 24 }}>game synopsis/theme</h3>
       <p>
-        Orpheus (of Hack Club fame) wants to gift Heidi some sweet coins.  To do this, he must jump across platforms, 
-        collect coins and power-ups such as his sweet red dunking boots, and ultimately deliver them.
+        Orpheus (of Hack Club fame) wants to gift Heidi some coins.  To do this, Orpheus must jump across platforms, 
+        explore the level, collect power-ups (sweet red slam-dunking boots), and ultimately deliver them before time runs out.
       </p>
       <p> Here is an example of gameplay:</p>
       <video
