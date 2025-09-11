@@ -50,7 +50,12 @@ export default function Submit() {
     alert('Submit proposal clicked')
   }
   const onShip = () => {
-    alert('Ship clicked')
+    const url = 'https://forms.hackclub.com/t/2Qm8V88i48us'
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch {
+      window.location.href = url
+    }
   }
 
   const baseBtn = {
@@ -83,7 +88,7 @@ export default function Submit() {
           >
             propose
           </button>
-          <div style={{ position: 'absolute', marginTop: 220, width: '80%', maxWidth: 720, textAlign: 'center', color: '#333', opacity: hovered === 'propose' ? 1 : 0, transition: 'opacity 180ms ease' }}>
+          <div style={{ position: 'absolute', marginTop: 220, width: '80%', maxWidth: 720, textAlign: 'center', color: '#333', opacity: (!showArrow || hovered === 'propose') ? 1 : 0, transition: 'opacity 180ms ease' }}>
             {(() => {
               const word = 'Pitch'
               const rest = ' your new project in a 1-2 minute video with voiceover'
@@ -136,7 +141,7 @@ export default function Submit() {
           >
             ship
           </button>
-          <div style={{ position: 'absolute', marginTop: 220, width: '80%', maxWidth: 720, textAlign: 'center', color: '#333', opacity: hovered === 'ship' ? 1 : 0, transition: 'opacity 180ms ease' }}>
+          <div style={{ position: 'absolute', marginTop: 220, width: '80%', maxWidth: 720, textAlign: 'center', color: '#333', opacity: (!showArrow || hovered === 'ship') ? 1 : 0, transition: 'opacity 180ms ease' }}>
             <span style={{ fontFamily: 'ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace', letterSpacing: 0.2 }}>
               Submit your shipped project along with a 5 minute video w/ voiceover for your{' '}
               {(() => {
