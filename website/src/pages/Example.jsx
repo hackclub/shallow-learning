@@ -19,7 +19,7 @@ export default function Example() {
 
   return (
     <div>
-      <center><h1 style={{ marginTop: 24 }}>Collect Coins For Heidi!</h1></center>
+      <center><h1 style={{ marginTop: 24 }}><b>COLLECT COINS FOR HEIDI</b></h1></center><br></br>
       <p>
         This simple platformer prototype showcases a compact <a href="https://en.wikipedia.org/wiki/Artificial_neural_network" target="_blank" rel="noreferrer noopener">neural network</a> policy optimized with
         a <a href="https://en.wikipedia.org/wiki/Genetic_algorithm" target="_blank" rel="noreferrer noopener">genetic algorithm (GA)</a>.
