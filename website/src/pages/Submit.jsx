@@ -47,10 +47,15 @@ export default function Submit() {
     return () => window.removeEventListener('resize', compute)
   }, [])
   const onProposal = () => {
-    alert('Submit proposal clicked')
+    const url = 'https://airtable.com/appQqKxv6lC3CH2jS/pagxOstwXEoB243mY/form'
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch {
+      window.location.href = url
+    }
   }
   const onShip = () => {
-    const url = 'https://forms.hackclub.com/t/2Qm8V88i48us'
+    const url = 'https://submit.hackclub.com/shallow-learning'
     try {
       window.open(url, '_blank', 'noopener,noreferrer')
     } catch {

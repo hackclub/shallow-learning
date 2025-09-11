@@ -5,6 +5,7 @@ import Example from './pages/Example'
 import FAQ from './pages/FAQ'
 import Submit from './pages/Submit'
 import BackgroundNetwork from './components/BackgroundNetwork'
+import CountdownTimer from './components/CountdownTimer'
 
 export default function App() {
   const navbarHeight = 75
@@ -152,6 +153,7 @@ export default function App() {
           <Route path="/submit" element={<Submit />} />
         </Routes>
       </main>
+      <CountdownTimer />
     </div>
   )
 }

@@ -2,28 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react'
 
 // Floating countdown timer with a digital-clock feel (bottom-right on all pages)
 export default function CountdownTimer() {
-  const detectDeadline = () => {
-    try {
-      const url = new URL(window.location.href)
-      const q = url.searchParams.get('deadline')
-      if (q) {
-        const t = new Date(q)
-        if (!isNaN(t.getTime())) return t
-      }
-    } catch {}
-    try {
-      const s = localStorage.getItem('countdownDeadline')
-      if (s) {
-        const t = new Date(s)
-        if (!isNaN(t.getTime())) return t
-      }
-    } catch {}
-    const fallback = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-    try { localStorage.setItem('countdownDeadline', fallback.toISOString()) } catch {}
-    return fallback
-  }
+  const DEADLINE_UTC = '2025-10-13T04:00:00Z' // 12:00 AM ET on Oct 13, 2025 (UTC)
 
-  const [deadline] = useState(() => detectDeadline())
+  const [deadline] = useState(() => new Date(DEADLINE_UTC))
   const [now, setNow] = useState(Date.now())
   const [blink, setBlink] = useState(true)
   const [hover, setHover] = useState(false)
@@ -63,10 +44,17 @@ export default function CountdownTimer() {
 
   const labelStyle = { color: '#666', fontSize: 10, marginTop: 4, textAlign: 'center' }
 
+  // Hover label: format explicitly in ET and show midnight
+  const deadlineLabelET = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+  }).format(deadline)
+
   return (
     <div
       aria-label="countdown"
-      title={`Deadline: ${deadline.toLocaleString()}`}
+      title={`Deadline (ET): ${deadlineLabelET}`}
       style={{
         position: 'fixed',
         right: 12,
@@ -86,7 +74,7 @@ export default function CountdownTimer() {
       onMouseLeave={() => setHover(false)}
     >
       <div style={{ position: 'absolute', right: 0, bottom: '100%', marginBottom: 6, padding: '6px 8px', background: 'rgba(255,255,255,0.95)', border: '1px solid rgba(0,0,0,0.12)', borderRadius: 8, boxShadow: '0 6px 18px rgba(0,0,0,0.08)', color: '#111', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace', fontSize: 12, letterSpacing: 0.5, opacity: hover ? 1 : 0, transition: 'opacity 160ms ease', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-        The deadline for submissions is {deadline.toLocaleString()}
+        The deadline for submissions is {deadlineLabelET} ET
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ textAlign: 'center' }}>
