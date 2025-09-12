@@ -37,6 +37,10 @@ ship a project that leverages a not-necessarily-so-deep neural network to produc
         <li><a href="https://www.together.ai" target="_blank" rel="noreferrer noopener">Together AI</a></li>
         <li><a href="https://replicate.com" target="_blank" rel="noreferrer noopener">Replicate</a></li>
         <li><a href="https://northflank.com" target="_blank" rel="noreferrer noopener">Northflank</a></li>
+        <li><a href="https://aws.amazon.com" target="_blank" rel="noreferrer noopener">Amazon Web Services (AWS)</a></li>
+        <li><a href="https://cloud.google.com" target="_blank" rel="noreferrer noopener">Google Cloud</a></li>
+        <li><a href="https://azure.microsoft.com" target="_blank" rel="noreferrer noopener">Microsoft Azure</a></li>
+        <li><a href="https://www.digitalocean.com" target="_blank" rel="noreferrer noopener">DigitalOcean</a></li>
       </ul>
 
     </div>
