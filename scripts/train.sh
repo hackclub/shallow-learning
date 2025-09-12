@@ -17,15 +17,15 @@ mkdir -p "$CKPT_DIR"
 
 # Optimal-ish defaults; pass any extra args to override
 exec "$PY" -m platformer train \
-  --generations 100 \
-  --pop-size 50 \
-  --elite-frac 0.15 \
+  --generations 5000 \
+  --pop-size 128 \
+  --elite-frac 0.03 \
   --mutation-std-start 0.08 \
   --mutation-std-end 0.01 \
-  --eval-episodes 3 \
+  --eval-episodes 1 \
   --ckpt-dir "$CKPT_DIR" \
   --render-speed 3 \
-  --num-workers 16 \
+  --num-workers 32 \
   "$@"
 
 

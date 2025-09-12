@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Iterable
 import math
 import numpy as np
+# (no profiling here; use external profilers like py-spy)
 
 
 Platform = Tuple[float, float, float, float]  # (x, y, w, h) in world units, y upwards
@@ -137,7 +138,7 @@ class GameConfig:
     # Raycasting for observations
     raycast_enabled: bool = True
     raycast_max_dist: float = 30.0
-    raycast_interval_s: float = 0.05
+    raycast_interval_s: float = 0.5
 
     # Exploration bitfield observation (8x8 grid across the map)
     exploration_grid_size: int = 8
@@ -370,7 +371,90 @@ class PlatformerEnv:
         self.jump_cut_applied = False
         self.jump_cooldown_left_s = 0.0
 
+        # Build spatial index for platforms and coins to speed collisions and ray queries
+        self._build_spatial_index()
         return self._get_observation()
+
+    # --------------------------- Spatial grid helpers ---------------------------
+    def _build_spatial_index(self) -> None:
+        """Create simple uniform grids for platforms and coins.
+
+        Cell size is the configured tile size. Grids map (cx,cy) -> list of items.
+        Platforms are stored as (px, py, pw, ph) tuples. Coins store GameEntity refs.
+        """
+        cell = float(getattr(self.config, 'tile_size', 1.0))
+        self._cell_size = cell
+        self._plat_grid: Dict[Tuple[int, int], List[Tuple[float, float, float, float]]] = {}
+        self._coin_grid: Dict[Tuple[int, int], List[GameEntity]] = {}
+
+        def insert_rect(grid: Dict[Tuple[int, int], list], minx: float, miny: float, maxx: float, maxy: float, item) -> None:
+            cx0 = int(math.floor(minx / cell))
+            cx1 = int(math.floor(maxx / cell))
+            cy0 = int(math.floor(miny / cell))
+            cy1 = int(math.floor(maxy / cell))
+            for cy in range(cy0, cy1 + 1):
+                for cx in range(cx0, cx1 + 1):
+                    grid.setdefault((cx, cy), []).append(item)
+
+        # Insert platforms
+        for (px, py, pw, ph) in self.config.platforms:
+            insert_rect(self._plat_grid, px, py, px + pw, py + ph, (px, py, pw, ph))
+
+        # Insert coins
+        for coin in self.coins:
+            minx = coin.x - coin.w * 0.5
+            maxx = coin.x + coin.w * 0.5
+            miny = coin.y - coin.h * 0.5
+            maxy = coin.y + coin.h * 0.5
+            insert_rect(self._coin_grid, minx, miny, maxx, maxy, coin)
+
+    def _query_platforms_aabb(self, minx: float, miny: float, maxx: float, maxy: float) -> Iterable[Tuple[float, float, float, float]]:
+        cell = float(getattr(self, '_cell_size', getattr(self.config, 'tile_size', 1.0)))
+        grid = getattr(self, '_plat_grid', None)
+        if not grid:
+            # Fallback: no grid built yet
+            return [(px, py, pw, ph) for (px, py, pw, ph) in self.config.platforms]
+        cx0 = int(math.floor(minx / cell))
+        cx1 = int(math.floor(maxx / cell))
+        cy0 = int(math.floor(miny / cell))
+        cy1 = int(math.floor(maxy / cell))
+        seen: set = set()
+        out: List[Tuple[float, float, float, float]] = []
+        for cy in range(cy0, cy1 + 1):
+            for cx in range(cx0, cx1 + 1):
+                items = grid.get((cx, cy))
+                if not items:
+                    continue
+                for it in items:
+                    if it in seen:
+                        continue
+                    seen.add(it)
+                    out.append(it)
+        return out
+
+    def _query_coins_aabb(self, minx: float, miny: float, maxx: float, maxy: float) -> Iterable[GameEntity]:
+        cell = float(getattr(self, '_cell_size', getattr(self.config, 'tile_size', 1.0)))
+        grid = getattr(self, '_coin_grid', None)
+        if not grid:
+            return list(self.coins)
+        cx0 = int(math.floor(minx / cell))
+        cx1 = int(math.floor(maxx / cell))
+        cy0 = int(math.floor(miny / cell))
+        cy1 = int(math.floor(maxy / cell))
+        seen_ids: set = set()
+        out: List[GameEntity] = []
+        for cy in range(cy0, cy1 + 1):
+            for cx in range(cx0, cx1 + 1):
+                items = grid.get((cx, cy))
+                if not items:
+                    continue
+                for it in items:
+                    key = id(it)
+                    if key in seen_ids:
+                        continue
+                    seen_ids.add(key)
+                    out.append(it)
+        return out
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
         if self.done:
@@ -440,7 +524,8 @@ class PlatformerEnv:
 
         # Horizontal move and resolve against platform sides
         new_x = self.x + self.vx * dt
-        for (px, py, pw, ph) in self.config.platforms:
+        plats_h = self._query_platforms_aabb(min(self.x, new_x) - player_half_w, self.y, max(self.x, new_x) + player_half_w, self.y + player_h)
+        for (px, py, pw, ph) in plats_h:
             left = px
             right = px + pw
             bottom = py
@@ -463,7 +548,8 @@ class PlatformerEnv:
         # Vertical move and resolve against platform tops/bottoms
         new_y = self.y + self.vy * dt
         landed = False
-        for (px, py, pw, ph) in self.config.platforms:
+        plats_v = self._query_platforms_aabb(self.x - player_half_w, min(self.y, new_y), self.x + player_half_w, max(self.y, new_y) + player_h)
+        for (px, py, pw, ph) in plats_v:
             left = px
             right = px + pw
             bottom = py
@@ -537,7 +623,8 @@ class PlatformerEnv:
         # keep player entity in sync with physics position
         self.player_entity.x = self.x
         self.player_entity.y = self.y + cfg.player_h * 0.5
-        for coin in self.coins:
+        # Query only nearby coins
+        for coin in self._query_coins_aabb(self.player_entity.x - self.player_entity.w * 0.5, self.player_entity.y - self.player_entity.h * 0.5, self.player_entity.x + self.player_entity.w * 0.5, self.player_entity.y + self.player_entity.h * 0.5):
             if not coin.active:
                 continue
             if entities_collide(self.player_entity, coin):
@@ -691,7 +778,12 @@ class PlatformerEnv:
             t_best = None
             t_type: str = 'none'
             # platforms
-            for (px, py, pw, ph) in cfg.platforms:
+            # Query platforms along a bounding box of the ray path (approximate)
+            ray_minx = min(origin_x, origin_x + dx * max_dist)
+            ray_maxx = max(origin_x, origin_x + dx * max_dist)
+            ray_miny = min(origin_y, origin_y + dy * max_dist)
+            ray_maxy = max(origin_y, origin_y + dy * max_dist)
+            for (px, py, pw, ph) in self._query_platforms_aabb(ray_minx, ray_miny, ray_maxx, ray_maxy):
                 t = self._ray_intersect_aabb(origin_x, origin_y, dx, dy, px, py, px + pw, py + ph)
                 # Ignore immediate self-floor hit within a small epsilon distance
                 if under_plat is not None and (px, py, pw, ph) == under_plat and t is not None:
@@ -703,7 +795,7 @@ class PlatformerEnv:
                         t_best = t
                         t_type = 'platform'
             # coins
-            for coin in getattr(self, 'coins', []):
+            for coin in self._query_coins_aabb(ray_minx, ray_miny, ray_maxx, ray_maxy):
                 if not coin.active:
                     continue
                 t = self._ray_intersect_aabb(origin_x, origin_y, dx, dy, coin.x - coin.w * 0.5, coin.y - coin.h * 0.5, coin.x + coin.w * 0.5, coin.y + coin.h * 0.5)

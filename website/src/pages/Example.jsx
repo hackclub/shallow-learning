@@ -49,7 +49,7 @@ export default function Example() {
         poster="/img/gameplay.png"
         style={{ width: '50%', display: 'block', margin: '0 auto 16px', borderRadius: 12 }}
       >
-        <source src="https://hc-cdn.hel1.your-objectstorage.com/s/v3/241065c6422a7c3b168d069a47040fc93dbf697e_demo.mp4" type="video/mp4" />
+        <source src="https://hc-cdn.hel1.your-objectstorage.com/s/v3/fad22efc446bdd02bc912b1d1677f44e67521fda_best.mp4" type="video/mp4" />
         Your browser does not support the video tag.
       </video>
       
